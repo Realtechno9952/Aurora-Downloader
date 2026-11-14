@@ -1,11 +1,9 @@
-# yt-dlp Launcher - native messaging helper for Firefox.
-# Works in Windows PowerShell 5.1 and PowerShell 7. Keep this file ASCII-only.
+# Aurora Downloader 2.0.0 beta 2 - the helper that lets the browser extension (Firefox or Chromium) run yt-dlp on this computer.
+# The browser starts it through host.bat and talks to it over standard input/output (native messaging).
+# Runs in Windows PowerShell 5.1 and PowerShell 7. Keep this file ASCII-only.
 $ErrorActionPreference = 'Stop'
-
-# ---- Locations known to work. Left blank so it searches dynamically via WinGet globs.
-$KnownYtDlp      = ''
-$KnownFfmpegDir = ''
-
+$script:Version    = '2.0.0.2'
+$script:HostDir    = $PSScriptRoot
 $script:isWin      = ($env:OS -eq 'Windows_NT')
 $script:exeSuffix  = ''
 if ($script:isWin) { $script:exeSuffix = '.exe' }
@@ -16,11 +14,11 @@ $script:pipeBroken = $false
 $script:lenBuf     = New-Object byte[] 4
 $script:inTask     = $null
 
-# ---------- messaging ----------
+# ============================== messaging ==============================
 function Send-Msg($obj) {
     if ($script:pipeBroken) { return }
     try {
-        $bytes = [Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Compress))
+        $bytes = [Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Compress -Depth 6))
         $script:outStream.Write([BitConverter]::GetBytes([int]$bytes.Length), 0, 4)
         $script:outStream.Write($bytes, 0, $bytes.Length)
         $script:outStream.Flush()
@@ -51,11 +49,13 @@ function Read-Msg {
     return (Read-Body $b)
 }
 
+# While yt-dlp runs we also watch stdin, so the browser can cancel or disconnect.
 function Start-StdinWatch {
     if ($null -eq $script:inTask) { $script:inTask = $script:inStream.ReadAsync($script:lenBuf, 0, 4) }
 }
 
-# Test-Path throws on a drive that doesn't exist; these never do.
+# ============================== files and folders ==============================
+# Test-Path throws on a drive that does not exist; these never do.
 function Test-File([string]$p) {
     try { return [bool](Test-Path -LiteralPath $p -PathType Leaf -ErrorAction SilentlyContinue) } catch { return $false }
 }
@@ -63,9 +63,6 @@ function Test-Dir([string]$p) {
     try { return [bool](Test-Path -LiteralPath $p -PathType Container -ErrorAction SilentlyContinue) } catch { return $false }
 }
 
-# ---------- finding yt-dlp / ffmpeg / deno ----------
-# Firefox starts this helper with whatever PATH Firefox itself had when it launched, which can be
-# stale (missing tools installed since). So we look in many places, not just PATH.
 function Get-LocalAppData {
     if ($env:LOCALAPPDATA) { return $env:LOCALAPPDATA }
     try { $d = [Environment]::GetFolderPath('LocalApplicationData'); if ($d) { return $d } } catch {}
@@ -79,7 +76,8 @@ function Get-WinGetDir([string]$leaf) {
     return [IO.Path]::Combine($local, 'Microsoft', 'WinGet', $leaf)
 }
 
-# PATH as currently stored by Windows (registry), which includes installs made after Firefox started.
+# PATH as Windows has it stored now. A Firefox that was already running when a tool got installed
+# still has the old PATH, so we read the stored one too.
 function Get-FreshPathDirs {
     $dirs = @()
     if ($script:isWin) {
@@ -102,11 +100,17 @@ function Find-InDirs([string]$file, $dirs) {
     return $null
 }
 
-function Find-Tool([string]$name, [string[]]$packageGlobs, [string[]]$known) {
+# Where to look, in order: the helper's own "bin" folder (drop yt-dlp.exe and ffmpeg.exe there if you
+# installed them by hand), this process's PATH, the stored Windows PATH, WinGet's links, WinGet's packages.
+function Find-Tool([string]$name, [string[]]$packageGlobs, [string[]]$extraDirs) {
     $file = $name + $script:exeSuffix
+    $p = Find-InDirs $file @([IO.Path]::Combine($script:HostDir, 'bin'))
+    if ($p) { return $p }
     $c = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($c) { return $c.Source }
     $p = Find-InDirs $file (Get-FreshPathDirs)
+    if ($p) { return $p }
+    $p = Find-InDirs $file @($extraDirs)
     if ($p) { return $p }
     $links = Get-WinGetDir 'Links'
     if ($links) {
@@ -122,16 +126,13 @@ function Find-Tool([string]$name, [string[]]$packageGlobs, [string[]]$known) {
             }
         }
     }
-    foreach ($k in $known) {
-        if ($k -and (Test-File $k)) { return $k }
-    }
     return $null
 }
 
 function Get-Tools {
     if ($script:tools) { return $script:tools }
-    $y = Find-Tool 'yt-dlp' @('yt-dlp.yt-dlp_*') @($KnownYtDlp)
-    $f = Find-Tool 'ffmpeg' @('yt-dlp.FFmpeg_*', '*FFmpeg*') @(if ($KnownFfmpegDir) { [IO.Path]::Combine($KnownFfmpegDir, 'ffmpeg' + $script:exeSuffix) } else { '' })
+    $y = Find-Tool 'yt-dlp' @('yt-dlp.yt-dlp_*') @()
+    $f = Find-Tool 'ffmpeg' @('yt-dlp.FFmpeg_*', '*FFmpeg*') @()
     $d = Find-Tool 'deno' @('DenoLand.Deno_*') @()
     $ffDir = $null
     if ($f) { $ffDir = ([IO.Path]::GetDirectoryName($f)).TrimEnd('\', '/') }
@@ -141,10 +142,18 @@ function Get-Tools {
     return $script:tools
 }
 
+function Find-Winget {
+    $apps = $null
+    $local = Get-LocalAppData
+    if ($local) { $apps = [IO.Path]::Combine($local, 'Microsoft', 'WindowsApps') }
+    return (Find-Tool 'winget' @() @($apps))
+}
+
 function Get-SearchNote {
     $local = Get-LocalAppData
     if (-not $local) { $local = '(LOCALAPPDATA is not set)' }
-    return "Looked in PATH, the saved Windows PATH, $local\Microsoft\WinGet\Links, and $local\Microsoft\WinGet\Packages. None of them had yt-dlp."
+    $bin = [IO.Path]::Combine($script:HostDir, 'bin')
+    return "Looked in $bin, PATH, the saved Windows PATH, $local\Microsoft\WinGet\Links and $local\Microsoft\WinGet\Packages. None of them had yt-dlp."
 }
 
 function Get-DownloadsDir {
@@ -165,12 +174,33 @@ function Get-DownloadsDir {
     return $d.TrimEnd('\', '/')
 }
 
+function Get-OutDir([string]$folder) {
+    if (-not $folder) { return (Get-DownloadsDir) }
+    if ($folder.Contains('"')) { throw 'The download folder path has a character that is not allowed.' }
+    try {
+        if (-not [IO.Path]::IsPathRooted($folder)) { throw 'The download folder must be a full path such as D:\Videos.' }
+        $full = [IO.Path]::GetFullPath($folder).TrimEnd('\', '/')
+        if ($full.Length -le 2) { throw 'Choose a folder, not a whole drive.' }
+        if (-not (Test-Dir $full)) { [void](New-Item -ItemType Directory -Path $full -Force) }
+        return $full
+    } catch {
+        throw ("Can't use that download folder: " + $_.Exception.Message)
+    }
+}
+
+function Test-TargetUrl([string]$u) {
+    if ($u.Length -gt 2000 -or $u -cnotmatch '^https?://[^\s"<>]+$') { throw "That doesn't look like a link I can download from." }
+    return $u
+}
+
+# ============================== running programs ==============================
 function Start-Tool([string]$exe, [string]$argString) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $exe
     $psi.Arguments = $argString
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    # Never let a child share our stdin/stdout: that is the channel Firefox talks to us on.
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
@@ -179,6 +209,7 @@ function Start-Tool([string]$exe, [string]$argString) {
     $psi.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'
     $psi.EnvironmentVariables['PYTHONUTF8'] = '1'
 
+    # Give yt-dlp a PATH that reaches ffmpeg and deno (deno solves YouTube's JavaScript challenges).
     $tools = Get-Tools
     $parts = New-Object System.Collections.ArrayList
     foreach ($d in @($tools.ffmpegDir, $tools.denoDir, (Get-WinGetDir 'Links'))) {
@@ -210,135 +241,7 @@ function Stop-Tree($p) {
     } catch {}
 }
 
-function Get-Friendly([string]$errText, [bool]$usedLogin) {
-    $lines = @($errText -split "`r?`n" | Where-Object { $_.Trim() })
-    $last = $lines | Where-Object { $_ -match '^ERROR' } | Select-Object -Last 1
-    if (-not $last) { $last = $lines | Select-Object -Last 1 }
-    if (-not $last) { $last = 'yt-dlp stopped without saying why.' }
-    $hint = $null
-    if ($errText -match '(?i)not a bot') {
-        if ($usedLogin) { $hint = "YouTube still wants proof you're not a bot, even with your Firefox login. Make sure you're signed in to YouTube in Firefox, or wait a while / switch network." }
-        else { $hint = "YouTube wants proof you're not a bot on this connection. Turn on Settings > Use my Firefox login and try again, or wait a while / switch network." }
-    } elseif ($errText -match '(?i)\b429\b|too many requests') {
-        $hint = 'YouTube is limiting this connection. Wait a while, or switch network (a phone hotspot works), then try again.'
-    } elseif ($errText -match '(?i)ffmpeg.*(not found|not installed)|ffprobe.*not found') {
-        $hint = "ffmpeg wasn't found. Install it with: winget install yt-dlp.yt-dlp"
-<<<<<<< HEAD
-    } elseif ($errText -match '(?i)requested format is not available') {
-        $hint = "That resolution or file type isn't offered for this video. Try Best, or another resolution."
-    } elseif ($errText -match '(?i)unsupported url|no video could be found|no video formats found') {
-        $hint = "yt-dlp can't find a video it can download on this page."
-=======
->>>>>>> 63d176cdf9b04668e3c9abd6d39bfa40838421c3
-    } elseif ($errText -match '(?i)private video|confirm your age|members-only|video unavailable|not available') {
-        $hint = "YouTube won't let this video be downloaded without signing in, or it isn't available."
-    }
-    $text = if ($hint) { $hint } else { [string]$last }
-    return @{ message = $text; detail = [string]$last }
-}
-
-function Invoke-YtDlp([string]$exe, [string]$argString) {
-    $p = Start-Tool $exe $argString
-    $cancelled = $false
-    $finalPath = ''
-    $already = $false
-<<<<<<< HEAD
-    $files = 0
-=======
->>>>>>> 63d176cdf9b04668e3c9abd6d39bfa40838421c3
-    $err = ''
-    try {
-        $outTask = $p.StandardOutput.ReadLineAsync()
-        $errTask = $p.StandardError.ReadToEndAsync()
-        Start-StdinWatch
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $lastProgress = -1000
-        while ($true) {
-            if ($outTask.Wait(100)) {
-                $line = $outTask.Result
-                if ($null -eq $line) { break }
-                if ($line.StartsWith('FILEPATH|')) {
-<<<<<<< HEAD
-                    $finalPath = $line.Substring(9); $files++
-                } else {
-                    if ($line -match 'has already been downloaded|already present|already exists') { $already = $true }
-=======
-                    $finalPath = $line.Substring(9)
-                } else {
-                    if ($line -match 'has already been downloaded') { $already = $true }
->>>>>>> 63d176cdf9b04668e3c9abd6d39bfa40838421c3
-                    $isProgress = ($line -match '^\[download\]\s+[\d.]+%')
-                    $now = $sw.ElapsedMilliseconds
-                    if ((-not $isProgress) -or (($now - $lastProgress) -ge 250) -or ($line -match '\s100(\.0+)?%')) {
-                        if ($isProgress) { $lastProgress = $now }
-                        Send-Msg @{ type = 'log'; line = $line }
-                    }
-                }
-                $outTask = $p.StandardOutput.ReadLineAsync()
-            }
-            if ($script:pipeBroken) { $cancelled = $true; Stop-Tree $p; break }
-            if ($script:inTask.IsCompleted) {
-                $n = 0
-                try { $n = [int]$script:inTask.Result } catch { $n = 0 }
-                $script:inTask = $null
-                if ($n -le 0) { $cancelled = $true; Stop-Tree $p; break }
-                if (($n -lt 4) -and (-not (Read-Bytes $script:lenBuf $n (4 - $n)))) { $cancelled = $true; Stop-Tree $p; break }
-                $m = Read-Body $script:lenBuf
-                if ($m -and $m.action -eq 'cancel') { $cancelled = $true; Stop-Tree $p; break }
-                Start-StdinWatch
-            }
-        }
-        if (-not $p.WaitForExit(15000)) { Stop-Tree $p }
-        $p.WaitForExit()
-        if ($errTask.Wait(3000)) { $err = [string]$errTask.Result }
-    } finally {
-        if (-not $p.HasExited) { Stop-Tree $p }
-    }
-<<<<<<< HEAD
-    return @{ code = $p.ExitCode; err = $err; cancelled = $cancelled; finalPath = $finalPath; already = $already; files = $files }
-=======
-    return @{ code = $p.ExitCode; err = $err; cancelled = $cancelled; finalPath = $finalPath; already = $already }
->>>>>>> 63d176cdf9b04668e3c9abd6d39bfa40838421c3
-}
-
-function Invoke-Check {
-    $t = Get-Tools
-    if (-not $t.ytdlp) {
-        Send-Msg @{ type = 'check'; ok = $false; message = 'yt-dlp was not found.'; detail = (Get-SearchNote) }
-        return
-    }
-    Send-Msg @{ type = 'check'; ok = $true; ytdlp = [string]$t.ytdlp; ffmpeg = [bool]$t.ffmpegDir; deno = [bool]$t.denoDir }
-}
-
-<<<<<<< HEAD
-function Test-TargetUrl([string]$u) {
-    if ($u.Length -gt 2000 -or $u -cnotmatch '^https?://[^\s"<>]+$') { throw "That doesn't look like a link I can download from." }
-    return $u
-}
-
-function Get-OutDir([string]$folder) {
-    if (-not $folder) { return (Get-DownloadsDir) }
-    if ($folder.Contains('"')) { throw 'The download folder path has a character that is not allowed.' }
-    try {
-        if (-not [IO.Path]::IsPathRooted($folder)) { throw 'The download folder must be a full path such as D:\Videos.' }
-        $full = [IO.Path]::GetFullPath($folder).TrimEnd('\', '/')
-        if ($full.Length -le 2) { throw 'Choose a folder, not a whole drive.' }
-        if (-not (Test-Dir $full)) { [void](New-Item -ItemType Directory -Path $full -Force) }
-        return $full
-    } catch {
-        throw ("Can't use that download folder: " + $_.Exception.Message)
-    }
-}
-
-function Format-Clock([double]$sec) {
-    $ts = [TimeSpan]::FromSeconds($sec)
-    return ('{0}:{1:00}:{2:00}' -f [int][math]::Floor($ts.TotalHours), $ts.Minutes, $ts.Seconds)
-}
-function Format-ClockLabel([double]$sec) {
-    $ts = [TimeSpan]::FromSeconds($sec)
-    return ('{0}h{1:00}m{2:00}s' -f [int][math]::Floor($ts.TotalHours), $ts.Minutes, $ts.Seconds)
-}
-
+# Run something short and collect its output.
 function Invoke-Quick([string]$exe, [string]$argString, [int]$timeoutMs = 60000) {
     $p = Start-Tool $exe $argString
     $o = $p.StandardOutput.ReadToEndAsync()
@@ -353,22 +256,151 @@ function Invoke-Quick([string]$exe, [string]$argString, [int]$timeoutMs = 60000)
     return @{ code = $p.ExitCode; out = $out; err = $err }
 }
 
-function Find-Winget {
-    $apps = $null
-    $local = Get-LocalAppData
-    if ($local) { $apps = [IO.Path]::Combine($local, 'Microsoft', 'WindowsApps', 'winget.exe') }
-    return (Find-Tool 'winget' @() @($apps))
+# Run something long (yt-dlp, winget): forward its output lines to Firefox, and stop it if Firefox
+# sends "cancel" or disconnects.
+function Invoke-Streamed([string]$exe, [string]$argString) {
+    $p = Start-Tool $exe $argString
+    $cancelled = $false
+    $finalPath = ''
+    $already = $false
+    $files = 0
+    $err = ''
+    $tail = New-Object System.Collections.Generic.List[string]
+    try {
+        $outTask = $p.StandardOutput.ReadLineAsync()
+        $errTask = $p.StandardError.ReadToEndAsync()
+        Start-StdinWatch
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $lastProgress = -1000
+        while ($true) {
+            if ($outTask.Wait(100)) {
+                $line = $outTask.Result
+                if ($null -eq $line) { break }
+                if ($line.StartsWith('FILEPATH|')) {
+                    $finalPath = $line.Substring(9)
+                    $files++
+                } else {
+                    if ($line -match 'has already been downloaded|already present|already exists') { $already = $true }
+                    $isProgress = ($line -match '^\[download\]\s+[\d.]+%')
+                    if ((-not $isProgress) -and ($line.Trim().Length -gt 2)) { $tail.Add($line.Trim()); if ($tail.Count -gt 12) { $tail.RemoveAt(0) } }
+                    $now = $sw.ElapsedMilliseconds
+                    if ((-not $isProgress) -or (($now - $lastProgress) -ge 250) -or ($line -match '\s100(\.0+)?%')) {
+                        if ($isProgress) { $lastProgress = $now }
+                        Send-Msg @{ type = 'log'; line = $line }
+                    }
+                }
+                $outTask = $p.StandardOutput.ReadLineAsync()
+            }
+            if ($script:pipeBroken) { $cancelled = $true; Stop-Tree $p; break }
+            if ($script:inTask.IsCompleted) {
+                $n = 0
+                try { $n = [int]$script:inTask.Result } catch { $n = 0 }
+                $script:inTask = $null
+                # n = 0 means Firefox closed the connection (quit, reload, disabled): stop what we are doing.
+                if ($n -le 0) { $cancelled = $true; Stop-Tree $p; break }
+                if (($n -lt 4) -and (-not (Read-Bytes $script:lenBuf $n (4 - $n)))) { $cancelled = $true; Stop-Tree $p; break }
+                $m = Read-Body $script:lenBuf
+                if ($m -and $m.action -eq 'cancel') { $cancelled = $true; Stop-Tree $p; break }
+                Start-StdinWatch
+            }
+        }
+        if (-not $p.WaitForExit(15000)) { Stop-Tree $p }
+        $p.WaitForExit()
+        if ($errTask.Wait(3000)) { $err = [string]$errTask.Result }
+    } finally {
+        if (-not $p.HasExited) { Stop-Tree $p }
+    }
+    return @{ code = $p.ExitCode; err = $err; out = ($tail -join "`n"); cancelled = $cancelled; finalPath = $finalPath; already = $already; files = $files }
+}
+
+# Turn yt-dlp's error text into something a person can act on.
+function Get-Friendly([string]$errText, [bool]$usedLogin) {
+    $lines = @($errText -split "`r?`n" | Where-Object { $_.Trim() })
+    $last = $lines | Where-Object { $_ -match '^ERROR' } | Select-Object -Last 1
+    if (-not $last) { $last = $lines | Select-Object -Last 1 }
+    if (-not $last) { $last = 'yt-dlp stopped without saying why.' }
+    $hint = $null
+    if ($errText -match '(?i)not a bot') {
+        if ($usedLogin) { $hint = "YouTube still wants proof you're not a bot, even with your browser login. Make sure you're signed in to YouTube in that browser, or wait a while / switch network." }
+        else { $hint = "YouTube wants proof you're not a bot on this connection. Turn on Settings > Use my browser login and try again, or wait a while / switch network." }
+    } elseif ($errText -match '(?i)cookie database|dpapi|decrypt|cookies? from (chrome|edge|brave|chromium|vivaldi|opera)') {
+        $hint = "yt-dlp could not read the login cookies from that browser. Chrome, Edge and Brave lock or encrypt them in a way yt-dlp often cannot open (close the browser and try again, or choose Firefox under Settings > Take login from)."
+    } elseif ($errText -match '(?i)\b429\b|too many requests') {
+        $hint = 'YouTube is limiting this connection. Wait a while, or switch network (a phone hotspot works), then try again.'
+    } elseif ($errText -match '(?i)ffmpeg.*(not found|not installed)|ffprobe.*not found') {
+        $hint = "ffmpeg wasn't found. Install it with: winget install yt-dlp.yt-dlp"
+    } elseif ($errText -match '(?i)requested format is not available') {
+        $hint = "That resolution or file type isn't offered for this video. Try Best, or another resolution."
+    } elseif ($errText -match '(?i)unsupported url|no video could be found|no video formats found') {
+        $hint = "yt-dlp can't find a video it can download on this page."
+    } elseif ($errText -match '(?i)private video|confirm your age|members-only|video unavailable|not available') {
+        $hint = "YouTube won't let this video be downloaded without signing in, or it isn't available."
+    }
+    $text = if ($hint) { $hint } else { [string]$last }
+    return @{ message = $text; detail = [string]$last }
+}
+
+# ============================== winget ==============================
+# One row of "winget list": ... <id> <installed> [<available>] <source>. Only ids and versions are read,
+# so it works in any Windows language.
+function Read-WingetRow([string]$line, [string]$id) {
+    $tok = @($line -split '\s+' | Where-Object { $_ })
+    $i = -1
+    for ($k = 0; $k -lt $tok.Count; $k++) { if ($tok[$k] -ieq $id) { $i = $k; break } }
+    if ($i -lt 0 -or ($i + 1) -ge $tok.Count) { return $null }
+    $rest = New-Object System.Collections.Generic.List[string]
+    for ($k = $i + 1; $k -lt $tok.Count; $k++) { if ($tok[$k] -ne '<' -and $tok[$k] -ne '>') { $rest.Add($tok[$k]) } }
+    if ($rest.Count -gt 0 -and $rest[$rest.Count - 1] -match '^(winget|msstore)$') { $rest.RemoveAt($rest.Count - 1) }
+    if ($rest.Count -eq 0) { return $null }
+    $avail = ''
+    if ($rest.Count -ge 2) { $avail = $rest[1] }
+    return @{ installed = $rest[0]; available = $avail }
+}
+
+# What winget itself says about yt-dlp and ffmpeg. This is the truth for "is there an update", because
+# winget is also what installs the update. Returns $null if winget can't be used.
+function Get-WingetState {
+    $wg = Find-Winget
+    if (-not $wg) { return $null }
+    $r = $null
+    try { $r = Invoke-Quick $wg 'list --source winget --accept-source-agreements --disable-interactivity' 120000 } catch { return $null }
+    if (-not $r.out) { return $null }
+    $state = @{ ytdlp = $null; ffmpeg = $null }
+    foreach ($line in ($r.out -split "`r`n|`n|`r")) {
+        $row = Read-WingetRow $line 'yt-dlp.yt-dlp'
+        if ($row) { $state.ytdlp = $row }
+        $row = Read-WingetRow $line 'yt-dlp.FFmpeg'
+        if ($row) { $state.ffmpeg = $row }
+    }
+    return $state
+}
+
+# ============================== small formatters ==============================
+function Format-Clock([double]$sec) {
+    $ts = [TimeSpan]::FromSeconds($sec)
+    return ('{0}:{1:00}:{2:00}' -f [int][math]::Floor($ts.TotalHours), $ts.Minutes, $ts.Seconds)
+}
+function Format-ClockLabel([double]$sec) {
+    $ts = [TimeSpan]::FromSeconds($sec)
+    return ('{0}h{1:00}m{2:00}s' -f [int][math]::Floor($ts.TotalHours), $ts.Minutes, $ts.Seconds)
+}
+
+# ============================== actions ==============================
+function Invoke-Ping {
+    Send-Msg @{ type = 'ping'; ok = $true; version = $script:Version; powershell = $PSVersionTable.PSVersion.ToString(); os = [string][Environment]::OSVersion.VersionString; hostDir = $script:HostDir }
+}
+
+function Invoke-Check {
+    $t = Get-Tools
+    if (-not $t.ytdlp) {
+        Send-Msg @{ type = 'check'; ok = $false; message = 'yt-dlp was not found.'; detail = (Get-SearchNote) }
+        return
+    }
+    Send-Msg @{ type = 'check'; ok = $true; ytdlp = [string]$t.ytdlp; ffmpeg = [bool]$t.ffmpegDir; deno = [bool]$t.denoDir }
 }
 
 function Invoke-Download($msg) {
     $url = Test-TargetUrl ([string]$msg.url)
-=======
-function Invoke-Download($msg) {
-    $url = [string]$msg.url
-    if ($url -cnotmatch '^https://www\.youtube\.com/watch\?v=[A-Za-z0-9_-]{11}$') {
-        throw "That doesn't look like a YouTube video link."
-    }
->>>>>>> 63d176cdf9b04668e3c9abd6d39bfa40838421c3
     $height = 0
     if ((-not [int]::TryParse([string]$msg.height, [ref]$height)) -or $height -lt 0 -or $height -gt 4320) {
         throw 'Unsupported resolution.'
@@ -380,7 +412,6 @@ function Invoke-Download($msg) {
         return
     }
     $ffArg = ''
-<<<<<<< HEAD
     if ($tools.ffmpegDir) { $ffArg = "--ffmpeg-location `"$($tools.ffmpegDir)`"" }
 
     $dl = Get-OutDir ([string]$msg.folder)
@@ -413,7 +444,8 @@ function Invoke-Download($msg) {
         $clipLabel = (Format-ClockLabel $cs) + '-' + (Format-ClockLabel $ce)
     }
 
-    # Audio quality tiers. YouTube's audio is ~48k AAC, ~128k AAC, ~50-160k Opus (and 256k AAC on some videos).
+    # Audio quality tiers. YouTube offers ~48k AAC, ~128k AAC, ~50-160k Opus (and 256k AAC on some videos).
+    # "<=?" means "at most this, or not reported", so sites that don't report a value still work.
     $audio = [string]$msg.audio
     if (@('low', 'medium', 'high', 'super') -notcontains $audio) { $audio = 'high' }
     switch ($audio) {
@@ -457,7 +489,9 @@ function Invoke-Download($msg) {
     }
     if ($ffArg) { $all.Add($ffArg) }
     $login = [bool]$msg.login
-    if ($login) { $all.Add('--cookies-from-browser firefox') }
+    $cookieBrowser = [string]$msg.browser
+    if ($cookieBrowser -notmatch '^(firefox|chrome|edge|brave|chromium|vivaldi|opera)$') { $cookieBrowser = 'firefox' }
+    if ($login) { $all.Add('--cookies-from-browser ' + $cookieBrowser) }
 
     # what gets embedded in the file
     if (([bool]$msg.thumb) -and ($ext -ne 'webm')) { $all.Add('--embed-thumbnail') }
@@ -483,58 +517,22 @@ function Invoke-Download($msg) {
 
     $note = ''
     if ($withSubs) {
-=======
-    if ($tools.ffmpegDir) { $ffArg = "--ffmpeg-location `"$($tools.ffmpegDir)`" " }
-
-    $dl = Get-DownloadsDir
-
-    $audio = [string]$msg.audio
-    if (@('low', 'medium', 'high', 'super') -notcontains $audio) { $audio = 'high' }
-    switch ($audio) {
-        'low'    { $aSel = 'ba[abr<=70]' }
-        'medium' { $aSel = 'ba[abr<=130]' }
-        'high'   { $aSel = 'ba[abr<=170]' }
-        default  { $aSel = 'ba' }
-    }
-    if ($height -gt 0) { $v = "bv*[height<=$height]"; $hf = "[height<=$height]" } else { $v = 'bv*'; $hf = '' }
-    if ($aSel -eq 'ba') { $fmt = "$v+ba/b$hf" } else { $fmt = "$v+$aSel/$v+ba/b$hf" }
-
-    $tpl = '%(title)s.%(ext)s'
-    if ($msg.idInName) { $tpl = '%(title)s [%(id)s].%(ext)s' }
-    $login = [bool]$msg.login
-    $loginArg = ''
-    if ($login) { $loginArg = '--cookies-from-browser firefox ' }
-
-    $base = '--newline --no-colors --no-quiet --no-playlist --encoding utf-8 --trim-filenames 200 ' +
-            "-f `"$fmt`" --merge-output-format mkv --remux-video mkv " + $ffArg + $loginArg +
-            '--embed-metadata --embed-chapters --embed-thumbnail ' +
-            "-P `"$dl`" -o `"$tpl`" " +
-            '--print "after_move:FILEPATH|%(filepath)s"'
-    $subArgs = '--write-subs --write-auto-subs --sub-langs en --sleep-subtitles 2 --embed-subs'
-
-    $note = ''
-    if ($msg.subs) {
->>>>>>> 63d176cdf9b04668e3c9abd6d39bfa40838421c3
-        $r = Invoke-YtDlp $exe "$base $subArgs `"$url`""
+        $r = Invoke-Streamed $exe "$base $subArgs `"$url`""
         if ((-not $r.cancelled) -and $r.code -ne 0 -and $r.err -match '(?i)subtitle') {
             Send-Msg @{ type = 'log'; line = 'Captions were blocked by YouTube. Downloading without captions...' }
             $note = ' (YouTube blocked the captions)'
-            $r = Invoke-YtDlp $exe "$base `"$url`""
+            $r = Invoke-Streamed $exe "$base `"$url`""
         }
     } else {
-        $r = Invoke-YtDlp $exe "$base `"$url`""
+        $r = Invoke-Streamed $exe "$base `"$url`""
     }
 
     if ($r.cancelled) {
         Send-Msg @{ type = 'done'; ok = $false; cancelled = $true; message = 'Download cancelled.' }
     } elseif ($r.code -eq 0) {
-<<<<<<< HEAD
         if ($playlist) { $text = "Saved $($r.files) video(s) to $where." }
         elseif ($r.already) { $text = "A file with this title is already in $where." }
         else { $text = "Saved to $where." }
-=======
-        $text = if ($r.already) { 'A file with this title is already in your Downloads folder.' } else { 'Saved to your Downloads folder.' }
->>>>>>> 63d176cdf9b04668e3c9abd6d39bfa40838421c3
         Send-Msg @{ type = 'done'; ok = $true; message = ($text + $note); filePath = [string]$r.finalPath }
     } else {
         $f = Get-Friendly $r.err $login
@@ -542,7 +540,6 @@ function Invoke-Download($msg) {
     }
 }
 
-<<<<<<< HEAD
 function Invoke-Thumbnail($msg) {
     $url = Test-TargetUrl ([string]$msg.url)
     $fmt = [string]$msg.format
@@ -560,7 +557,7 @@ function Invoke-Thumbnail($msg) {
     if ($tools.ffmpegDir) { $all.Add("--ffmpeg-location `"$($tools.ffmpegDir)`"") }
     $all.Add("-P `"$dl`" -o `"%(title)s.%(ext)s`" `"$url`"")
     $t0 = (Get-Date).AddSeconds(-3)
-    $r = Invoke-YtDlp $tools.ytdlp ($all -join ' ')
+    $r = Invoke-Streamed $tools.ytdlp ($all -join ' ')
     if ($r.cancelled) {
         Send-Msg @{ type = 'thumbnail'; ok = $false; message = 'Cancelled.' }
         return
@@ -621,7 +618,10 @@ function Invoke-Versions {
             } catch {}
         }
     }
-    Send-Msg @{ type = 'versions'; ok = $true; ytdlp = [string]$y; ffmpeg = [string]$f; winget = [bool](Find-Winget) }
+    $state = Get-WingetState
+    $wgOut = $null
+    if ($state) { $wgOut = @{ ytdlp = $state.ytdlp; ffmpeg = $state.ffmpeg } }
+    Send-Msg @{ type = 'versions'; ok = $true; ytdlp = [string]$y; ffmpeg = [string]$f; winget = [bool](Find-Winget); wg = $wgOut }
 }
 
 function Invoke-Update($msg) {
@@ -631,12 +631,19 @@ function Invoke-Update($msg) {
     if ($target -eq 'ffmpeg') { $id = 'yt-dlp.FFmpeg' }
     $t = Get-Tools
     $wg = Find-Winget
-    if ($wg) {
+    if ($wg -and ($msg.managed -or $target -eq 'ffmpeg')) {
         Send-Msg @{ type = 'log'; line = 'Asking winget to update...' }
-        $r = Invoke-YtDlp $wg "upgrade --id $id --exact --silent --accept-source-agreements --accept-package-agreements --disable-interactivity"
+        $r = Invoke-Streamed $wg "upgrade --id $id --exact --source winget --silent --accept-source-agreements --accept-package-agreements --disable-interactivity"
+        $wingetSaid = (@($r.out -split "`n" | Where-Object { $_ -match '[A-Za-z]{3}' -and $_ -notmatch '^[\s\-\\|/]+$' } | Select-Object -Last 2) -join ' ')
+        # winget's record can be out of step with the real yt-dlp.exe. If it refuses, try yt-dlp's own updater.
+        if ($target -eq 'ytdlp' -and $t.ytdlp -and (-not $r.cancelled) -and $r.code -ne 0 -and $r.code -ne -1978335189 -and $r.code -ne -1978335135) {
+            Send-Msg @{ type = 'log'; line = "winget could not do it (code $($r.code)). Trying yt-dlp's own updater..." }
+            $r = Invoke-Streamed $t.ytdlp '-U'
+            if ($r.code -ne 0) { $r.out = [string]$r.out + ' (winget said: ' + $wingetSaid + ')' }
+        }
     } elseif ($target -eq 'ytdlp' -and $t.ytdlp) {
-        Send-Msg @{ type = 'log'; line = 'winget was not found, so using the built-in yt-dlp updater...' }
-        $r = Invoke-YtDlp $t.ytdlp '-U'
+        Send-Msg @{ type = 'log'; line = 'Using the built-in yt-dlp updater...' }
+        $r = Invoke-Streamed $t.ytdlp '-U'
     } else {
         Send-Msg @{ type = 'done'; ok = $false; message = "winget wasn't found. Update it yourself with: winget upgrade --id $id" }
         return
@@ -646,12 +653,16 @@ function Invoke-Update($msg) {
         Send-Msg @{ type = 'done'; ok = $false; message = 'The update was interrupted.' }
     } elseif ($r.code -eq 0) {
         Send-Msg @{ type = 'done'; ok = $true; message = 'Updated.' }
-    } elseif ($r.code -eq -1978335189) {
+    } elseif ($r.code -eq -1978335189 -or $r.code -eq -1978335135) {
         # winget: no applicable upgrade found
         Send-Msg @{ type = 'done'; ok = $true; message = 'Already up to date.' }
     } else {
         $f = Get-Friendly $r.err $false
-        Send-Msg @{ type = 'done'; ok = $false; message = "The update didn't finish (code $($r.code))."; detail = $f.detail }
+        $said = (@($r.out -split "`n" | Where-Object { $_ -match '[A-Za-z]{3}' -and $_ -notmatch '^[\s\-\\|/]+$' } | Select-Object -Last 2) -join ' ')
+        if ($said.Length -gt 160) { $said = $said.Substring($said.Length - 160) }
+        $msgText = "The update didn't finish (code $($r.code))."
+        if ($said) { $msgText = $msgText + ' ' + $said }
+        Send-Msg @{ type = 'done'; ok = $false; message = $msgText; detail = $f.detail }
     }
 }
 
@@ -696,19 +707,11 @@ function Invoke-Reveal($msg) {
     $path = [IO.Path]::GetFullPath([string]$msg.path)
     if (-not (Test-File $path)) {
         Send-Msg @{ type = 'reveal'; ok = $false; message = "That file isn't there any more." }
-=======
-function Invoke-Reveal($msg) {
-    $sep = [string][IO.Path]::DirectorySeparatorChar
-    $dl = [IO.Path]::GetFullPath((Get-DownloadsDir)).TrimEnd($sep) + $sep
-    $path = [IO.Path]::GetFullPath([string]$msg.path)
-    $ok = $path.StartsWith($dl, [StringComparison]::OrdinalIgnoreCase) -and (Test-File $path)
-    if (-not $ok) {
-        Send-Msg @{ type = 'reveal'; ok = $false; message = 'That file is not in your Downloads folder.' }
->>>>>>> 63d176cdf9b04668e3c9abd6d39bfa40838421c3
         return
     }
     if ($script:isWin) {
         try {
+            # If the helper exits before Explorer has taken over, the window never appears.
             $ep = [System.Diagnostics.Process]::Start('explorer.exe', "/select,`"$path`"")
             if ($ep) { [void]$ep.WaitForExit(5000) }
             Start-Sleep -Milliseconds 300
@@ -720,11 +723,12 @@ function Invoke-Reveal($msg) {
     Send-Msg @{ type = 'reveal'; ok = $true }
 }
 
+# ============================== main ==============================
 try {
     $req = Read-Msg
     if ($null -eq $req) { exit 0 }
     switch ([string]$req.action) {
-<<<<<<< HEAD
+        'ping'        { Invoke-Ping }
         'check'       { Invoke-Check }
         'download'    { Invoke-Download $req }
         'thumbnail'   { Invoke-Thumbnail $req }
@@ -734,19 +738,9 @@ try {
         'checkfolder' { Invoke-CheckFolder $req }
         'reveal'      { Invoke-Reveal $req }
         default       { Send-Msg @{ type = 'done'; ok = $false; message = 'Unknown request.' } }
-=======
-        'check'    { Invoke-Check }
-        'download' { Invoke-Download $req }
-        'reveal'   { Invoke-Reveal $req }
-        default    { Send-Msg @{ type = 'done'; ok = $false; message = 'Unknown request.' } }
->>>>>>> 63d176cdf9b04668e3c9abd6d39bfa40838421c3
     }
 } catch {
     $text = $_.Exception.Message
     Send-Msg @{ type = 'done'; ok = $false; message = $text; detail = $text }
 }
-<<<<<<< HEAD
 exit 0
-=======
-exit 0
->>>>>>> 63d176cdf9b04668e3c9abd6d39bfa40838421c3

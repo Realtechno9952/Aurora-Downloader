@@ -1,3 +1,4 @@
+// Aurora Downloader 2.0.0 beta 2 - popup.
 "use strict";
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -12,7 +13,7 @@ const AUDIO = [["low", "Low", "About 50 kbps. Smallest files."], ["medium", "Med
 const THEMES = [["system", "System"], ["light", "Light"], ["dark", "Dark"]];
 const CONC = [["1", "1"], ["2", "2"], ["3", "3"]];
 const ACCENTS = [["ember", "Ember", "#d93a12", "#b3123f"], ["ocean", "Ocean", "#0a63d8", "#0b3fb0"], ["violet", "Violet", "#7b3fe4", "#a02bc4"],
-                 ["forest", "Forest", "#13833a", "#0a6a5a"], ["graphite", "Graphite", "#3d3d4a", "#1f1f29"], ["clear", "Clear", "", ""]];
+                 ["forest", "Forest", "#13833a", "#0a6a5a"], ["graphite", "Graphite", "#3d3d4a", "#1f1f29"]];
 const EXTS = [["mkv", "MKV"], ["mp4", "MP4"], ["webm", "WebM"], ["mp3", "MP3"], ["m4a", "M4A"], ["opus", "Opus"], ["flac", "FLAC"]];
 const THUMBFMTS = [["png", "PNG"], ["jpg", "JPG"], ["jpeg", "JPEG"], ["webp", "WebP"], ["jxl", "JPEG XL"]];
 const AUDIO_EXTS = ["mp3", "m4a", "opus", "flac"];
@@ -21,10 +22,15 @@ const ICONS = { good: CIRCLE + "M5.25 8.25l2 2 3.5-4.25", bad: CIRCLE + "M8 4.9v
 const DEFAULT_SETTINGS = {
   height: "0", subs: true, audio: "high", idInName: false, login: false, maxConcurrent: 2, theme: "system", accent: "ember", motion: true, labels: true,
   thumb: true, meta: true, desc: true, chapters: true, sponsor: false, infoJson: false, subLangs: "en", ext: "mkv", folder: "", clipTool: false,
-  clipAccurate: true, thumbFmt: "png", playlistMax: 100, checkUpdates: true, advOpen: false,
+  clipAccurate: true, thumbFmt: "png", playlistMax: 100, checkUpdates: true, advOpen: false, moreOpen: false,
 };
 // Runs inside the page: og:image for sites without a known thumbnail, plus the player's current time (for the Clip tool).
-const PAGE_CODE = '(function(){var v=document.querySelector("video");function m(p){var e=document.querySelector(\'meta[property="\'+p+\'"],meta[name="\'+p+\'"]\');return e&&e.content||""}return{image:m("og:image")||m("twitter:image"),title:m("og:title")||document.title,time:v?v.currentTime:null,duration:v&&isFinite(v.duration)?v.duration:null}})()';
+// Runs inside the page to read its title, thumbnail and playback position (works in Firefox and Chromium).
+function pageProbe() {
+  var v = document.querySelector("video");
+  function m(n) { var e = document.querySelector('meta[property="' + n + '"],meta[name="' + n + '"]'); return (e && e.content) || ""; }
+  return { image: m("og:image") || m("twitter:image"), title: m("og:title") || document.title, time: v ? v.currentTime : null, duration: v && isFinite(v.duration) ? v.duration : null };
+}
 
 let tab = { id: 0, target: null, info: null };
 let data = { jobs: [], history: [], settings: { ...DEFAULT_SETTINGS }, helper: { status: "unknown" }, updates: {}, op: {}, releasesUrl: "" };
@@ -85,7 +91,7 @@ function setBanner(tone) {
   const p = document.createElementNS(SVGNS, "path"); p.setAttribute("d", ICONS[tone]); svg.append(p);
 }
 async function pageInfo() {
-  try { const r = await browser.tabs.executeScript(tab.id, { code: PAGE_CODE }); return r && r[0] ? r[0] : null; } catch (e) { return null; }
+  try { const r = await browser.scripting.executeScript({ target: { tabId: tab.id }, func: pageProbe }); return r && r[0] && r[0].result ? r[0].result : null; } catch (e) { return null; }
 }
 async function reveal(path) {
   const r = await send({ type: "reveal", path });
@@ -114,7 +120,7 @@ function buildSeg(box, items, name, onPick) {
 }
 function buildSwatches() {
   for (const [id, label, c1, c2] of ACCENTS) {
-    const b = el("button", "sw" + (id === "clear" ? " clear" : "")); b.type = "button"; b.dataset.accent = id; b.title = label;
+    const b = el("button", "sw"); b.type = "button"; b.dataset.accent = id; b.title = label;
     b.setAttribute("role", "radio"); b.setAttribute("aria-label", label);
     if (c1) b.style.background = "linear-gradient(135deg," + c1 + "," + c2 + ")";
     b.addEventListener("click", () => set({ accent: id }));
@@ -135,7 +141,6 @@ function attachTilt() {
     const ry = (0.5 - px) * 2 * MAX, rx = (py - 0.5) * 2 * MAX;
     box.classList.add("tilting");
     box.style.transform = "translateY(-4px) scale(1.04) rotateX(" + rx.toFixed(2) + "deg) rotateY(" + ry.toFixed(2) + "deg)";
-    box.style.setProperty("--gx", (px * 100).toFixed(1) + "%"); box.style.setProperty("--gy", (py * 100).toFixed(1) + "%");
   });
   const leave = () => { box.classList.remove("tilting"); box.style.transform = ""; };
   box.addEventListener("pointerleave", leave);
@@ -257,7 +262,7 @@ function renderHome() {
   } else if (v === "setup") {
     const noHelper = h.reason === "helper";
     $("setupTitle").textContent = noHelper ? "Helper not set up" : "yt-dlp not found";
-    $("setupMsg").textContent = noHelper ? "Run install.ps1 from the host folder (once), then reload the extension." : "Install it, restart Firefox, then check again.";
+    $("setupMsg").textContent = noHelper ? "Run install.ps1 from the host folder (once), then reload the extension." : "Install it, restart your browser, then check again.";
     $("setupDetail").hidden = !h.detail; $("setupDetail").textContent = h.detail || "";
     $("setupCode").textContent = noHelper ? "powershell -ExecutionPolicy Bypass -File .\\install.ps1" : "winget install yt-dlp.yt-dlp";
   } else if (v === "clip") {
@@ -325,30 +330,40 @@ function renderSettings() {
   $("setThumbEmb").checked = s.thumb; $("setDesc").checked = s.desc; $("setChapters").checked = s.chapters; $("setMeta").checked = s.meta;
   $("setSponsor").checked = s.sponsor; $("setInfo").checked = s.infoJson; $("setClip").checked = s.clipTool; $("setClipAcc").checked = s.clipAccurate;
   $("clipAccRow").hidden = !s.clipTool; $("setUpd").checked = s.checkUpdates;
-  putText($("setSubLangs"), s.subLangs); putText($("setFolder"), s.folder); putText($("setPlMax"), String(s.playlistMax));
+  putText($("setSubLangs"), s.subLangs); putText($("setFolder"), s.folder); putText($("setPlMax"), String(s.playlistMax)); $("setLoginBrowser").value = s.loginBrowser || "auto";
   const a = AUDIO.find((x) => x[0] === s.audio); $("audioNote").textContent = a ? a[2] : "";
   document.querySelectorAll(".sw").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.accent === s.accent)));
   $("advBody").hidden = !s.advOpen; $("advBtn").setAttribute("aria-expanded", String(!!s.advOpen));
+  $("moreBody").hidden = !s.moreOpen; $("moreBtn").setAttribute("aria-expanded", String(!!s.moreOpen));
+  $("moreBtn").firstElementChild.textContent = s.moreOpen ? "Show less" : "Show more";
 }
 
 function updRow(id, info, target) {
-  const row = $(id), op = data.op || {}, avail = !!(info && info.available);
+  const row = $(id), op = data.op || {};
   row.querySelector(".upd-text").textContent = info ? info.text : "Not checked yet";
-  row.classList.toggle("avail", avail);
-  const btn = row.querySelector(".upd-btn");
-  btn.classList.toggle("primary", avail); btn.classList.toggle("secondary", !avail);
-  if (!target) { btn.textContent = avail ? "View release" : "Releases"; return; }
-  const mine = op.target === target, running = !!op.running && mine, log = row.querySelector(".upd-log");
-  btn.disabled = !!op.running; btn.textContent = running ? "Updating\u2026" : "Update";
+  row.classList.toggle("avail", !!(info && info.available));
+  const log = row.querySelector(".upd-log");
+  if (!log) return;
+  const mine = op.target === target, running = !!op.running && mine;
   const note = running ? op.line : mine && op.ok !== null && op.message ? op.message : "";
-  log.hidden = !note; log.textContent = note; log.className = "upd-log" + (!running && mine && note ? (op.ok ? " good" : " bad") : "");
+  log.hidden = !note; log.textContent = note;
+  log.className = "upd-log" + (!running && mine && note ? (op.ok ? " good" : " bad") : "");
+}
+// What the one Updates button does right now.
+function updMode() {
+  const u = data.updates || {};
+  if ((u.ytdlp && u.ytdlp.available) || (u.ffmpeg && u.ffmpeg.available)) return "update";
+  if (u.launcher && u.launcher.available) return "release";
+  return "check";
 }
 function renderUpdates() {
-  const u = data.updates || {}, op = data.op || {};
+  const u = data.updates || {}, op = data.op || {}, btn = $("updBtn"), mode = updMode();
   $("updDot").hidden = $("tabDot").hidden = !u.any;
   updRow("updYt", u.ytdlp, "ytdlp"); updRow("updFf", u.ffmpeg, "ffmpeg"); updRow("updLn", u.launcher, null);
   $("updWhen").textContent = u.checking ? "Checking\u2026" : u.checkedAt ? "Checked " + ago(u.checkedAt) : "Not checked yet";
-  $("updCheck").disabled = !!u.checking || !!op.running;
+  btn.disabled = !!u.checking || !!op.running;
+  btn.textContent = op.running ? "Updating\u2026" : u.checking ? "Checking\u2026" : mode === "update" ? "Update now" : mode === "release" ? "Get the new version" : "Check for updates";
+  btn.classList.toggle("primary", mode !== "check"); btn.classList.toggle("secondary", mode === "check");
 }
 
 function render() { applyAppearance(); renderStack(); renderHome(); renderHistory(); renderSettings(); renderUpdates(); }
@@ -435,6 +450,7 @@ $("resetSettings").addEventListener("click", () => send({ type: "resetSettings" 
 for (const [id, key] of [["setSubs", "subs"], ["setId", "idInName"], ["setLogin", "login"], ["setMotion", "motion"], ["setLabels", "labels"], ["setThumbEmb", "thumb"],
   ["setDesc", "desc"], ["setChapters", "chapters"], ["setMeta", "meta"], ["setSponsor", "sponsor"], ["setInfo", "infoJson"], ["setClip", "clipTool"],
   ["setClipAcc", "clipAccurate"], ["setUpd", "checkUpdates"]]) $(id).addEventListener("change", () => set({ [key]: $(id).checked }));
+$("setLoginBrowser").addEventListener("change", () => set({ loginBrowser: $("setLoginBrowser").value }));
 $("setSubLangs").addEventListener("change", () => {
   const v = $("setSubLangs").value.trim();
   if (!/^[A-Za-z0-9*_.,-]{1,60}$/.test(v)) { toast("Use language codes like en or en,es"); renderSettings(); return; }
@@ -454,12 +470,14 @@ $("browseFolder").addEventListener("click", async () => {
   if (r && r.ok === false && !r.cancelled && r.message) toast(r.message);
 });
 $("advBtn").addEventListener("click", () => set({ advOpen: !data.settings.advOpen }));
-$("updCheck").addEventListener("click", () => send({ type: "checkUpdates" }));
-$("updYt").querySelector(".upd-btn").addEventListener("click", () => send({ type: "updateTool", target: "ytdlp" }).then((r) => { if (r && r.ok === false && r.message) toast(r.message); }));
-$("updFf").querySelector(".upd-btn").addEventListener("click", () => send({ type: "updateTool", target: "ffmpeg" }).then((r) => { if (r && r.ok === false && r.message) toast(r.message); }));
-$("updLn").querySelector(".upd-btn").addEventListener("click", () => {
-  const u = data.updates && data.updates.launcher && data.updates.launcher.url;
-  browser.tabs.create({ url: u || data.releasesUrl || "https://github.com/Realtechno9952/yt-dlp-launcher/releases" });
+$("moreBtn").addEventListener("click", () => set({ moreOpen: !data.settings.moreOpen }));
+$("updBtn").addEventListener("click", () => {
+  const mode = updMode();
+  if (mode === "update") send({ type: "updateAll" }).then((r) => { if (r && r.ok === false && r.message) toast(r.message); });
+  else if (mode === "release") {
+    const u = data.updates && data.updates.launcher && data.updates.launcher.url;
+    browser.tabs.create({ url: u || data.releasesUrl || "https://github.com/Realtechno9952/yt-dlp-launcher/releases" });
+  } else send({ type: "checkUpdates" });
 });
 
 browser.runtime.onMessage.addListener((m) => {

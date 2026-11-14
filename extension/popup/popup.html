@@ -1,8 +1,9 @@
 <!doctype html>
+<!-- Aurora Downloader 2.0.0 beta 2 -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>yt-dlp Launcher</title>
+  <title>Aurora Downloader</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -17,7 +18,6 @@
           <div class="thumbwrap">
             <div class="thumb" id="thumbBox">
               <img id="thumb" alt="" draggable="false">
-              <div class="glare" id="glare" aria-hidden="true"></div>
               <button id="thumbBtn" class="thumb-btn" type="button" title="Save thumbnail" aria-label="Save the thumbnail as an image">
                 <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5M4.8 7 8 10.2 11.2 7M3 13h10"/></svg>
               </button>
@@ -110,19 +110,23 @@
         <fieldset><legend>Sound quality</legend><div id="setAudio" class="seg"></div><p id="audioNote" class="note"></p></fieldset>
         <fieldset><legend>Downloads at once</legend><div id="setConc" class="seg"></div></fieldset>
         <label class="row"><span>Add video ID to filename<small>Title [abc123].mkv instead of Title.mkv</small></span><input type="checkbox" id="setId" class="switch" role="switch"></label>
-        <label class="row"><span>Use my Firefox login<small>Helps when YouTube says "not a bot"</small></span><input type="checkbox" id="setLogin" class="switch" role="switch"></label>
+        <label class="row"><span>Use my browser login<small>Helps when YouTube says "not a bot". Works most reliably with Firefox</small></span><input type="checkbox" id="setLogin" class="switch" role="switch"></label>
+        <label class="row"><span>Take login from<small>Which browser yt-dlp borrows it from</small></span><select id="setLoginBrowser" class="text"><option value="auto">This browser</option><option value="firefox">Firefox</option><option value="chrome">Chrome</option><option value="edge">Edge</option><option value="brave">Brave</option><option value="chromium">Chromium</option><option value="vivaldi">Vivaldi</option><option value="opera">Opera</option></select></label>
       </div>
 
       <h3>Embeds</h3>
       <div class="stack">
-        <label class="row"><span>Thumbnail<small>Cover art inside the file</small></span><input type="checkbox" id="setThumbEmb" class="switch" role="switch"></label>
         <label class="row"><span>Subtitles<small>Embed captions by default</small></span><input type="checkbox" id="setSubs" class="switch" role="switch"></label>
-        <label class="field"><span>Subtitle languages</span><input id="setSubLangs" class="text" type="text" spellcheck="false" autocomplete="off" placeholder="en"></label>
+        <label class="row"><span>Thumbnail<small>Cover art inside the file</small></span><input type="checkbox" id="setThumbEmb" class="switch" role="switch"></label>
         <label class="row"><span>Description<small>The video description, in the file's tags</small></span><input type="checkbox" id="setDesc" class="switch" role="switch"></label>
-        <label class="row"><span>Chapters<small>Jump points, when the video has them</small></span><input type="checkbox" id="setChapters" class="switch" role="switch"></label>
-        <label class="row"><span>Title, uploader and date<small>Basic file info</small></span><input type="checkbox" id="setMeta" class="switch" role="switch"></label>
-        <label class="row"><span>SponsorBlock marks<small>Mark sponsor segments as chapters</small></span><input type="checkbox" id="setSponsor" class="switch" role="switch"></label>
-        <label class="row"><span>Full video info<small>MKV only. Makes files a little larger</small></span><input type="checkbox" id="setInfo" class="switch" role="switch"></label>
+        <button id="moreBtn" class="fold" type="button" aria-expanded="false" aria-controls="moreBody"><span>Show more</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg></button>
+        <div id="moreBody" class="stack" hidden>
+          <label class="field"><span>Subtitle languages</span><input id="setSubLangs" class="text" type="text" spellcheck="false" autocomplete="off" placeholder="en"></label>
+          <label class="row"><span>Chapters<small>Jump points, when the video has them</small></span><input type="checkbox" id="setChapters" class="switch" role="switch"></label>
+          <label class="row"><span>Title, uploader and date<small>Basic file info</small></span><input type="checkbox" id="setMeta" class="switch" role="switch"></label>
+          <label class="row"><span>SponsorBlock marks<small>Mark sponsor segments as chapters</small></span><input type="checkbox" id="setSponsor" class="switch" role="switch"></label>
+          <label class="row"><span>Full video info<small>MKV only. Makes files a little larger</small></span><input type="checkbox" id="setInfo" class="switch" role="switch"></label>
+        </div>
       </div>
 
       <h3>Appearance</h3>
@@ -149,11 +153,12 @@
 
       <h3 class="upd-h">Updates <i class="dot" id="updDot" hidden></i></h3>
       <div class="stack">
-        <label class="row"><span>Check when Firefox starts</span><input type="checkbox" id="setUpd" class="switch" role="switch"></label>
-        <div class="upd" id="updYt"><div class="upd-main"><strong>yt-dlp</strong><p class="upd-text"></p><p class="upd-log" hidden></p></div><button class="btn secondary sm upd-btn" type="button">Update</button></div>
-        <div class="upd" id="updFf"><div class="upd-main"><strong>ffmpeg</strong><p class="upd-text"></p><p class="upd-log" hidden></p></div><button class="btn secondary sm upd-btn" type="button">Update</button></div>
-        <div class="upd" id="updLn"><div class="upd-main"><strong>This extension</strong><p class="upd-text"></p></div><button class="btn secondary sm upd-btn" type="button">Releases</button></div>
-        <div class="upd-foot"><span id="updWhen"></span><button id="updCheck" class="btn secondary sm" type="button">Check now</button></div>
+        <label class="row"><span>Check when the browser starts</span><input type="checkbox" id="setUpd" class="switch" role="switch"></label>
+        <div class="upd" id="updYt"><div class="upd-main"><strong>yt-dlp</strong><p class="upd-text"></p><p class="upd-log" hidden></p></div></div>
+        <div class="upd" id="updFf"><div class="upd-main"><strong>ffmpeg</strong><p class="upd-text"></p><p class="upd-log" hidden></p></div></div>
+        <div class="upd" id="updLn"><div class="upd-main"><strong>This extension</strong><p class="upd-text"></p></div></div>
+        <button id="updBtn" class="btn secondary" type="button">Check for updates</button>
+        <p id="updWhen" class="hint"></p>
       </div>
     </section>
   </div>
@@ -174,6 +179,7 @@
     </button>
   </nav>
 </div>
+<script src="../lib/compat.js"></script>
 <script src="../lib/targets.js"></script>
 <script src="dock.js"></script>
 <script src="popup.js"></script>

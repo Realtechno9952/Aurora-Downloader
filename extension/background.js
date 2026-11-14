@@ -1,26 +1,28 @@
+// Aurora Downloader 2.0.0 beta 2 - background script: downloads, settings, history and updates.
 "use strict";
+// In a Chromium service worker the helper scripts are loaded here; in Firefox the manifest loads them.
+if (typeof importScripts === "function") { try { importScripts("lib/compat.js", "lib/targets.js"); } catch (e) {} }
 // Owns settings, history, updates and every download. Each download gets its own native helper process.
 
 const HOST = "yt_dlp_host";
-const REPOS = { launcher: "Realtechno9952/yt-dlp-launcher", ytdlp: "yt-dlp/yt-dlp", ffmpeg: "yt-dlp/FFmpeg-Builds" };
 const RELEASES_URL = "https://github.com/Realtechno9952/yt-dlp-launcher/releases";
-const FFMPEG_STALE_DAYS = 30;   // ffmpeg builds come out daily, so only flag a build this much older than the newest
 const DEFAULTS = {
   height: "0", subs: true, audio: "high", idInName: false, login: false, maxConcurrent: 2,
   theme: "system", accent: "ember", motion: true, labels: true,
   thumb: true, meta: true, desc: true, chapters: true, sponsor: false, infoJson: false, subLangs: "en",
   ext: "mkv", folder: "", clipTool: false, clipAccurate: true, thumbFmt: "png", playlistMax: 100,
-  checkUpdates: true, advOpen: false,
+  checkUpdates: true, advOpen: false, moreOpen: false, loginBrowser: "auto",
 };
 const CHOICES = {
   height: ["0", "4320", "2160", "1440", "1080", "720", "480", "360"],
   audio: ["low", "medium", "high", "super"],
   theme: ["system", "light", "dark"],
-  accent: ["ember", "ocean", "violet", "forest", "graphite", "clear"],
+  accent: ["ember", "ocean", "violet", "forest", "graphite"],
   ext: ["mkv", "mp4", "webm", "mp3", "m4a", "opus", "flac"],
   thumbFmt: ["png", "jpg", "jpeg", "webp", "jxl"],
+  loginBrowser: ["auto", "firefox", "chrome", "edge", "brave", "chromium", "vivaldi", "opera"],
 };
-const BOOLS = ["subs", "idInName", "login", "motion", "labels", "thumb", "meta", "desc", "chapters", "sponsor", "infoJson", "clipTool", "clipAccurate", "checkUpdates", "advOpen"];
+const BOOLS = ["subs", "idInName", "login", "motion", "labels", "thumb", "meta", "desc", "chapters", "sponsor", "infoJson", "clipTool", "clipAccurate", "checkUpdates", "advOpen", "moreOpen"];
 const ACTIVE = ["queued", "running"];
 
 let settings = { ...DEFAULTS };
@@ -34,6 +36,7 @@ const ports = new Map();
 const timers = new Map();
 const streams = new Map();
 
+const sess = (browser.storage && browser.storage.session) || null;
 const ready = (async () => {
   try {
     const s = await browser.storage.local.get({ settings: {}, history: [], updates: null });
@@ -41,7 +44,25 @@ const ready = (async () => {
     history = Array.isArray(s.history) ? s.history.slice(0, 50) : [];
     if (s.updates && typeof s.updates === "object") updates = { ...updates, ...s.updates, checking: false };
   } catch (e) {}
+  // Chromium may stop this script when idle. Bring back the job list; anything that was mid-download is marked interrupted.
+  if (sess) {
+    try {
+      const r = await sess.get({ jobs: [], nextId: 1 });
+      if (Array.isArray(r.jobs) && !jobs.length) {
+        jobs = r.jobs.map((j) => (ACTIVE.includes(j.phase)
+          ? { ...j, phase: "error", stage: "", percent: null, speed: "", eta: "", message: "Interrupted - the browser stopped the extension. Try again.", finishedAt: Date.now() } : j));
+        nextId = Math.max(nextId, parseInt(r.nextId, 10) || 1);
+      }
+    } catch (e) {}
+  }
 })();
+let persistTimer = null;
+function persistSoon() {
+  if (!sess) return;
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => { try { Promise.resolve(sess.set({ jobs, nextId })).catch(() => {}); } catch (e) {} }, 300);
+}
+function loginBrowser() { return settings.loginBrowser && settings.loginBrowser !== "auto" ? settings.loginBrowser : YTL_ENV.name; }
 
 function clean(p) {
   const o = {};
@@ -60,8 +81,8 @@ function cleanClip(c) {
   return { start: Math.floor(s), end: Math.ceil(e) };
 }
 
-const snap = () => ({ jobs: jobs.map((j) => ({ ...j })), history, settings, helper, updates, op, version: browser.runtime.getManifest().version, releasesUrl: RELEASES_URL });
-const emit = () => { browser.runtime.sendMessage({ type: "update", data: snap() }).catch(() => {}); refreshIndicators(); };
+const snap = () => ({ jobs: jobs.map((j) => ({ ...j })), history, settings, helper, updates, op, version: myVersion(), browserName: YTL_ENV.name, releasesUrl: RELEASES_URL });
+const emit = () => { browser.runtime.sendMessage({ type: "update", data: snap() }).catch(() => {}); refreshIndicators(); persistSoon(); };
 function upd(j, p) { Object.assign(j, p); emit(); }
 const jobById = (id) => jobs.find((j) => j.id === id);
 
@@ -74,14 +95,19 @@ function notify(title, message) {
 
 /* ---------- toolbar: active-download badge + red "update" dot ---------- */
 let lastBadge = null, lastDot = null;
-function loadImage(src) { return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; }); }
+const act = () => browser.action || browser.browserAction;
+async function loadBitmap(src) { const r = await fetch(src); return createImageBitmap(await r.blob()); }
+function makeCanvas(s) {
+  if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(s, s);
+  const c = document.createElement("canvas"); c.width = c.height = s; return c;
+}
 async function drawIcon(dot) {
   try {
-    if (!dot) { await browser.browserAction.setIcon({ path: { 16: "icons/icon-16.png", 32: "icons/icon-32.png" } }); return; }
-    const img = await loadImage(browser.runtime.getURL("icons/icon-96.png"));
+    if (!dot) { await act().setIcon({ path: { 16: "icons/icon-16.png", 32: "icons/icon-32.png" } }); return; }
+    const img = await loadBitmap(browser.runtime.getURL("icons/icon-96.png"));
     const imageData = {};
     for (const s of [16, 32, 48]) {
-      const c = document.createElement("canvas"); c.width = c.height = s;
+      const c = makeCanvas(s);
       const x = c.getContext("2d");
       x.drawImage(img, 0, 0, s, s);
       const r = Math.max(3, s * 0.2), cx = s - r - s * 0.04, cy = r + s * 0.04;
@@ -89,7 +115,7 @@ async function drawIcon(dot) {
       x.beginPath(); x.arc(cx, cy, r, 0, Math.PI * 2); x.fillStyle = "#e5173f"; x.fill();
       imageData[s] = x.getImageData(0, 0, s, s);
     }
-    await browser.browserAction.setIcon({ imageData });
+    await act().setIcon({ imageData });
   } catch (e) {}
 }
 function refreshIndicators() {
@@ -97,10 +123,10 @@ function refreshIndicators() {
     const n = jobs.filter((j) => ACTIVE.includes(j.phase)).length, text = n ? String(n) : "";
     if (text !== lastBadge) {
       lastBadge = text;
-      browser.browserAction.setBadgeText({ text });
+      act().setBadgeText({ text });
       if (n) {
-        browser.browserAction.setBadgeBackgroundColor({ color: "#d93a12" });
-        try { browser.browserAction.setBadgeTextColor({ color: "#ffffff" }); } catch (e) {}
+        act().setBadgeBackgroundColor({ color: "#d93a12" });
+        try { act().setBadgeTextColor({ color: "#ffffff" }); } catch (e) {}
       }
     }
     const dot = !!updates.any;
@@ -188,7 +214,7 @@ function launch(j) {
     });
     port.postMessage({
       action: "download", url: j.url, height: j.height, subs: j.subs, ext: j.ext, playlist: j.playlist, clip: j.clip,
-      audio: settings.audio, idInName: settings.idInName, login: settings.login, folder: settings.folder,
+      audio: settings.audio, idInName: settings.idInName, login: settings.login, browser: loginBrowser(), folder: settings.folder,
       thumb: settings.thumb, meta: settings.meta, desc: settings.desc, chapters: settings.chapters, sponsor: settings.sponsor,
       infoJson: settings.infoJson, subLangs: settings.subLangs, playlistMax: settings.playlistMax, clipAccurate: settings.clipAccurate,
     });
@@ -312,6 +338,26 @@ async function thumbnail(req) {
 }
 
 /* ---------- updates: yt-dlp, ffmpeg and this extension ---------- */
+const myVersion = () => { const m = browser.runtime.getManifest(); return m.version_name || m.version; };
+// "2.0.0 beta 2", "v2.0.0-beta.2", "2.0.0b2" and "2.0.0" all work; a final release beats any beta of it.
+function parseVer(s) {
+  const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-.\s_]*(alpha|a|beta|b|rc|pre|preview)[-.\s_]*(\d+)?)?/i.exec(String(s || "").trim());
+  if (!m) return { core: [0, 0, 0], rank: 4, pre: 0 };
+  const k = (m[4] || "").toLowerCase();
+  const rank = !k ? 4 : (k === "a" || k === "alpha") ? 1 : (k === "rc") ? 3 : 2;
+  return { core: [+m[1], +(m[2] || 0), +(m[3] || 0)], rank, pre: m[5] ? +m[5] : 0 };
+}
+function cmpVer(a, b) {
+  const x = parseVer(a), y = parseVer(b);
+  for (let i = 0; i < 3; i++) if (x.core[i] !== y.core[i]) return x.core[i] > y.core[i] ? 1 : -1;
+  if (x.rank !== y.rank) return x.rank > y.rank ? 1 : -1;
+  if (x.pre !== y.pre) return x.pre > y.pre ? 1 : -1;
+  return 0;
+}
+function verLabel(v) {
+  const p = parseVer(v), c = p.core.join(".");
+  return p.rank === 4 ? c : c + " " + ["", "alpha", "beta", "rc"][p.rank] + (p.pre ? " " + p.pre : "");
+}
 const vparts = (s) => (String(s || "").match(/\d+/g) || []).map(Number);
 function newer(a, b, n) {
   const x = vparts(a), y = vparts(b), len = n || Math.max(x.length, y.length);
@@ -319,50 +365,76 @@ function newer(a, b, n) {
   return false;
 }
 const fmtDate = (ms) => new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+const buildDate = (v) => { const m = /-(\d{4})(\d{2})(\d{2})$/.exec(v || ""); return m ? fmtDate(Date.UTC(+m[1], +m[2] - 1, +m[3])) : ""; };
 
-async function ghLatest(repo) {
-  const r = await fetch("https://api.github.com/repos/" + repo + "/releases/latest", { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" });
-  if (r.status === 404) return { none: true };
+async function ghJson(path) {
+  const r = await fetch("https://api.github.com/repos/" + path, { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" });
+  if (r.status === 404) return null;
   if (!r.ok) throw new Error(r.status === 403 ? "GitHub rate limit, try again later" : "GitHub answered " + r.status);
   return r.json();
 }
 const reason = (r) => String((r.reason && r.reason.message) || r.reason || "unknown error");
 
-function judgeYtdlp(installed, g) {
-  if (g.status !== "fulfilled") return { installed: installed || "", latest: "", available: false, text: "Couldn't check: " + reason(g) };
-  const latest = g.value && g.value.tag_name ? String(g.value.tag_name).replace(/^v/, "") : "";
-  if (!installed) return { installed: "", latest, available: false, text: "Not found by the helper" };
+// yt-dlp: when winget manages it, winget is the truth (it is also what installs the update).
+// Otherwise compare with the newest release on GitHub.
+function judgeYtdlp(installed, row, gh) {
+  if (!installed) return { installed: "", latest: "", available: false, managed: !!row, text: "Not found by the helper" };
+  if (row) {
+    // winget keeps its own record, which can disagree with the real file (for example after yt-dlp updated itself).
+    // Only offer a version that is really newer than the one that is really installed.
+    const offered = String(row.available || "");
+    const available = !!offered && newer(offered, installed);
+    return { installed, latest: available ? offered : "", available, managed: true, stale: !!offered && !available,
+             text: available ? installed + " \u2192 " + offered : "Up to date (" + installed + ")" };
+  }
+  if (!gh || gh.status !== "fulfilled" || !gh.value) {
+    return { installed, latest: "", available: false, managed: false, text: "Installed: " + installed + (gh && gh.status === "rejected" ? " (couldn't check: " + reason(gh) + ")" : "") };
+  }
+  const latest = String(gh.value.tag_name || "").replace(/^v/, "");
   const available = !!latest && newer(latest, installed, 3);
-  return { installed, latest, available, text: available ? installed + " \u2192 " + latest : "Up to date (" + installed + ")" };
+  return { installed, latest, available, managed: false, text: available ? installed + " \u2192 " + latest : "Up to date (" + installed + ")" };
 }
-function judgeFfmpeg(installed, g) {
-  if (g.status !== "fulfilled") return { installed: installed || "", latest: "", available: false, text: "Couldn't check: " + reason(g) };
-  if (!installed) return { installed: "", latest: "", available: false, text: "Not found by the helper" };
-  const m = /-(\d{4})(\d{2})(\d{2})$/.exec(installed);
-  const has = m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : null;
-  const rel = g.value && g.value.published_at ? Date.parse(g.value.published_at) : null;
-  if (!has || !rel) return { installed, latest: "", available: false, text: "Installed: " + installed };
-  const available = (rel - has) / 86400000 >= FFMPEG_STALE_DAYS;
-  return { installed, latest: fmtDate(rel), available, text: available ? "Build from " + fmtDate(has) + ", newer one available" : "Up to date (build from " + fmtDate(has) + ")" };
+// ffmpeg: new builds appear daily on GitHub, but winget only offers some of them, so only winget's word counts.
+function ffNewer(a, b) {
+  const da = /-(\d{8})$/.exec(a || ""), db = /-(\d{8})$/.exec(b || "");
+  if (da && db) return da[1] > db[1];
+  return !!a && a !== b;
+}
+function judgeFfmpeg(installed, row) {
+  if (!installed) return { installed: "", latest: "", available: false, managed: !!row, text: "Not found by the helper" };
+  const built = buildDate(installed), label = built ? "build from " + built : installed;
+  if (!row) return { installed, latest: "", available: false, managed: false, text: "Installed: " + label + " (can't check without winget)" };
+  const offered = String(row.available || "");
+  const available = !!offered && ffNewer(offered, installed);
+  return { installed, latest: available ? offered : "", available, managed: true, stale: !!offered && !available, text: available ? "Build from " + (built || installed) + ", newer one available" : "Up to date (" + label + ")" };
 }
 function judgeLauncher(g) {
-  const installed = browser.runtime.getManifest().version;
+  const installed = myVersion();
   if (g.status !== "fulfilled") return { installed, latest: "", available: false, url: RELEASES_URL, text: "Couldn't check: " + reason(g) };
-  if (g.value && g.value.none) return { installed, latest: "", available: false, url: RELEASES_URL, text: "v" + installed + " (no releases published yet)" };
-  const latest = String((g.value && g.value.tag_name) || "").replace(/^v/i, "");
-  const available = !!latest && newer(latest, installed);
-  return { installed, latest, available, url: (g.value && g.value.html_url) || RELEASES_URL, text: available ? "v" + installed + " \u2192 v" + latest : "Up to date (v" + installed + ")" };
+  const list = Array.isArray(g.value) ? g.value.filter((r) => r && !r.draft && r.tag_name) : [];
+  if (!list.length) return { installed, latest: "", available: false, url: RELEASES_URL, text: "v" + verLabel(installed) + " (no releases published yet)" };
+  let best = list[0];
+  for (const r of list) if (cmpVer(r.tag_name, best.tag_name) > 0) best = r;
+  const latest = String(best.tag_name).replace(/^v/i, "");
+  const available = cmpVer(latest, installed) > 0;
+  return { installed, latest, available, url: best.html_url || RELEASES_URL, prerelease: !!best.prerelease,
+           text: available ? "v" + verLabel(installed) + " \u2192 v" + verLabel(latest) + (best.prerelease && parseVer(latest).rank === 4 ? " (pre-release)" : "") : "Up to date (v" + verLabel(installed) + ")" };
 }
 
 async function checkUpdates() {
   await ready;
   if (updates.checking) return updates;
   updates = { ...updates, checking: true }; emit();
-  const [inst, gy, gf, gl] = await Promise.allSettled([
-    browser.runtime.sendNativeMessage(HOST, { action: "versions" }), ghLatest(REPOS.ytdlp), ghLatest(REPOS.ffmpeg), ghLatest(REPOS.launcher),
+  let iv = {};
+  try { const res = await browser.runtime.sendNativeMessage(HOST, { action: "versions" }); if (res && res.type === "versions") iv = res; } catch (e) {}
+  const wg = iv.wg || null;
+  const needGh = !!iv.ytdlp && !(wg && wg.ytdlp);
+  const [gy, gl] = await Promise.allSettled([
+    needGh ? ghJson("yt-dlp/yt-dlp/releases/latest") : Promise.resolve(null),
+    ghJson("Realtechno9952/yt-dlp-launcher/releases?per_page=10"),
   ]);
-  const iv = inst.status === "fulfilled" && inst.value && inst.value.type === "versions" ? inst.value : {};
-  const out = { checking: false, checkedAt: Date.now(), ytdlp: judgeYtdlp(iv.ytdlp, gy), ffmpeg: judgeFfmpeg(iv.ffmpeg, gf), launcher: judgeLauncher(gl), winget: !!iv.winget };
+  const out = { checking: false, checkedAt: Date.now(), ytdlp: judgeYtdlp(iv.ytdlp, wg && wg.ytdlp, needGh ? gy : null),
+                ffmpeg: judgeFfmpeg(iv.ffmpeg, wg && wg.ffmpeg), launcher: judgeLauncher(gl), winget: !!iv.winget };
   out.any = !!(out.ytdlp.available || out.ffmpeg.available || out.launcher.available);
   updates = out;
   browser.storage.local.set({ updates }).catch(() => {});
@@ -371,7 +443,8 @@ async function checkUpdates() {
 }
 
 function cleanLine(s) { return String(s || "").replace(/[^\x20-\x7e]/g, " ").replace(/\s+/g, " ").trim().slice(-110); }
-function updateTool(target) {
+function updateTool(target, opts) {
+  const recheck = !opts || opts.recheck !== false;
   if (target !== "ytdlp" && target !== "ffmpeg") return Promise.resolve({ ok: false, message: "Unknown update target." });
   if (op.running) return Promise.resolve({ ok: false, message: "An update is already running." });
   if (jobs.some((j) => ACTIVE.includes(j.phase))) return Promise.resolve({ ok: false, message: "Finish or cancel your downloads first." });
@@ -383,7 +456,7 @@ function updateTool(target) {
       op = { running: false, target, line: "", ok, message }; emit();
       if (port) { try { port.disconnect(); } catch (e) {} }
       notify(ok ? "Update finished" : "Update failed", message);
-      (ok ? checkUpdates() : Promise.resolve()).then(() => resolve({ ok, message }));
+      (ok && recheck ? checkUpdates() : Promise.resolve()).then(() => resolve({ ok, message }));
     };
     try { port = browser.runtime.connectNative(HOST); } catch (e) { return done(false, "The helper isn't available."); }
     port.onMessage.addListener((m) => {
@@ -391,8 +464,25 @@ function updateTool(target) {
       else if (m.type === "done") done(!!m.ok, m.message || "");
     });
     port.onDisconnect.addListener(() => done(false, "The helper stopped unexpectedly."));
-    port.postMessage({ action: "update", target });
+    port.postMessage({ action: "update", target, managed: !!(updates[target] && updates[target].managed) });
   });
+}
+
+// The one Update button: updates whichever of yt-dlp and ffmpeg is out of date, then checks again.
+async function updateAll() {
+  await ready;
+  const todo = ["ytdlp", "ffmpeg"].filter((t) => updates[t] && updates[t].available);
+  if (!todo.length) return { ok: true, message: "Nothing to update." };
+  const msgs = [];
+  let all = true;
+  for (const t of todo) {
+    const r = await updateTool(t, { recheck: false });
+    if (!r.ok) all = false;
+    msgs.push((t === "ytdlp" ? "yt-dlp: " : "ffmpeg: ") + r.message);
+    if (!r.ok && /Finish or cancel|already running/.test(r.message)) break;
+  }
+  await checkUpdates();
+  return { ok: all, message: msgs.join(" ") };
 }
 
 let lastAuto = 0;
@@ -406,8 +496,15 @@ browser.runtime.onStartup.addListener(autoCheck);
 browser.runtime.onInstalled.addListener(autoCheck);
 setTimeout(() => { ready.then(() => { if (settings.checkUpdates && Date.now() - (updates.checkedAt || 0) > 12 * 3600 * 1000) autoCheck(); }); }, 5000);
 ready.then(() => { lastDot = null; refreshIndicators(); });
+// Chromium can put this script to sleep, so a timer is not enough: an alarm wakes it for the periodic check.
+try {
+  browser.alarms.create("ytl-update-check", { periodInMinutes: 360 });
+  browser.alarms.onAlarm.addListener((a) => {
+    if (a && a.name === "ytl-update-check") ready.then(() => { if (settings.checkUpdates && Date.now() - (updates.checkedAt || 0) > 12 * 3600 * 1000) autoCheck(); });
+  });
+} catch (e) {}
 
-/* ---------- keyboard shortcut + right-click menu: "download with my defaults" ---------- */
+/* ---------- keyboard shortcut: "download with my defaults" ---------- */
 async function quickDownload(url, title) {
   await ready;
   const t = YTL.parse(url, title);
@@ -423,16 +520,9 @@ try {
     browser.tabs.query({ active: true, currentWindow: true }).then(([tab]) => quickDownload(tab && tab.url, tab && tab.title));
   });
 } catch (e) {}
-try {
-  browser.menus.create({ id: "ytl-default", title: "Download with yt-dlp (my defaults)", contexts: ["page", "link", "video"] });
-  browser.menus.onClicked.addListener((info, tab) => {
-    if (info.menuItemId !== "ytl-default") return;
-    quickDownload(info.linkUrl || info.pageUrl || (tab && tab.url), info.linkUrl ? info.linkText : tab && tab.title);
-  });
-} catch (e) {}
 
 /* ---------- messages from the popup ---------- */
-browser.runtime.onMessage.addListener((msg) => {
+YTL_onMessage((msg) => {
   switch (msg && msg.type) {
     case "getAll":        return ready.then(snap);
     case "checkHelper":   return checkHelper();
@@ -448,6 +538,7 @@ browser.runtime.onMessage.addListener((msg) => {
     case "pickFolder":    return pickFolder();
     case "checkUpdates":  return checkUpdates();
     case "updateTool":    return updateTool(msg.target);
+    case "updateAll":     return updateAll();
     case "clearHistory":  history = []; browser.storage.local.set({ history }).catch(() => {}); emit(); return Promise.resolve(true);
     case "removeHistory": history = history.filter((h) => h.id !== msg.id); browser.storage.local.set({ history }).catch(() => {}); emit(); return Promise.resolve(true);
   }

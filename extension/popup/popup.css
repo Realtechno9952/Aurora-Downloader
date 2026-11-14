@@ -1,3 +1,4 @@
+/* Aurora Downloader 2.0.1 - popup styles */
 /* Light/dark follow the panel. Accent, theme, labels and motion come from Settings (data-* on <html>). */
 :root {
   color-scheme: light dark;
@@ -12,7 +13,7 @@
   --glass-shadow: 0 10px 30px rgba(24, 24, 48, .20), 0 2px 6px rgba(24, 24, 48, .10);
   --glass-lift: 0 16px 38px rgba(24, 24, 48, .30), 0 3px 8px rgba(24, 24, 48, .14);
   --edge-dim: rgba(24, 24, 48, .10);
-  /* What the accent controls. The Clear accent swaps these for frosted glass. */
+  /* What the accent controls. */
   --ink: var(--a1);
   --btn-bg: linear-gradient(135deg, var(--a1), var(--a2));
   --btn-fg: var(--on);
@@ -50,30 +51,6 @@
 :root[data-accent="violet"][data-scheme="dark"] { --a1: #b794ff; --a2: #e08bff; }
 :root[data-accent="forest"][data-scheme="dark"] { --a1: #5fe3a0; --a2: #4fd1c5; }
 :root[data-accent="graphite"][data-scheme="dark"] { --a1: #d9d9e3; --a2: #a7a7b8; }
-/* Clear: colourless frosted glass, like Apple's Liquid Glass "clear" look */
-:root[data-accent="clear"] {
-  --a1: #3a3a48; --a2: #6c6c80; --on: #ffffff;
-  --ink: CanvasText;
-  --btn-bg: linear-gradient(180deg, rgba(255, 255, 255, .96), rgba(255, 255, 255, .5));
-  --btn-fg: CanvasText; --btn-edge: rgba(24, 24, 48, .16);
-  --btn-shadow: inset 0 1px 0 rgba(255, 255, 255, .95), 0 8px 20px rgba(24, 24, 48, .16);
-  --btn-blur: blur(12px) saturate(1.7);
-  --sel-bg: rgba(255, 255, 255, .78); --sel-edge: rgba(24, 24, 48, .30);
-  --fill: linear-gradient(90deg, rgba(40, 40, 58, .62), rgba(40, 40, 58, .38));
-  --switch-on: linear-gradient(135deg, rgba(40, 40, 58, .72), rgba(40, 40, 58, .52));
-  --lens: rgba(255, 255, 255, .9); --lens-edge: #ffffff;
-}
-:root[data-accent="clear"][data-scheme="dark"] {
-  --a1: #f4f4fa; --a2: #c8c8d6; --on: #14141a;
-  --btn-bg: linear-gradient(180deg, rgba(255, 255, 255, .30), rgba(255, 255, 255, .08));
-  --btn-edge: rgba(255, 255, 255, .38);
-  --btn-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 10px 24px rgba(0, 0, 0, .45);
-  --sel-bg: rgba(255, 255, 255, .17); --sel-edge: rgba(255, 255, 255, .55);
-  --fill: linear-gradient(90deg, rgba(255, 255, 255, .92), rgba(255, 255, 255, .55));
-  --switch-on: linear-gradient(135deg, rgba(255, 255, 255, .78), rgba(255, 255, 255, .5));
-  --knob: rgba(24, 24, 32, .92);
-  --lens: rgba(255, 255, 255, .2); --lens-edge: rgba(255, 255, 255, .55);
-}
 :root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { transition: none !important; animation: none !important; }
 
 * { box-sizing: border-box; }
@@ -100,9 +77,6 @@ h3:first-of-type { margin-top: 4px; }
 .thumb.tilting { transition: transform .09s linear, box-shadow .35s; box-shadow: 0 18px 34px rgba(20, 16, 40, .34), 0 4px 10px rgba(20, 16, 40, .18); }
 .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .thumb.no-img img { visibility: hidden; }
-.glare { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s;
-  background: radial-gradient(circle at var(--gx, 50%) var(--gy, 50%), rgba(255, 255, 255, .34), transparent 58%); }
-.thumb.tilting .glare { opacity: 1; }
 .thumb-btn { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; cursor: pointer;
   color: #fff; background: rgba(16, 16, 24, .5); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .3);
   -webkit-backdrop-filter: blur(8px) saturate(1.4); backdrop-filter: blur(8px) saturate(1.4);
@@ -147,8 +121,6 @@ fieldset.dim .chips { opacity: .4; }
 .chip input:focus-visible + span, .seg-item input:focus-visible + span { outline: 2px solid var(--ink); outline-offset: 2px; }
 .swatches { display: flex; gap: 12px; flex-wrap: wrap; }
 .sw { width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .35); }
-.sw.clear { background: radial-gradient(circle at 30% 24%, #fff 0, rgba(255, 255, 255, .78) 26%, rgba(214, 214, 228, .55) 62%, rgba(150, 150, 172, .6) 100%);
-  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .85), inset 0 -4px 8px rgba(0, 0, 0, .14), 0 1px 3px rgba(0, 0, 0, .25); }
 .sw[aria-checked="true"] { outline: 2px solid currentColor; outline-offset: 3px; }
 .sw:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 
@@ -291,3 +263,10 @@ code { display: block; padding: 10px 12px; border-radius: var(--r-sm); backgroun
   transition: transform .55s cubic-bezier(.34, 1.45, .5, 1), width .3s, box-shadow .25s; will-change: transform; }
 .dock.holding .lens { box-shadow: inset 0 1px 0 var(--lens-edge), 0 10px 24px rgba(0, 0, 0, .28); transition: transform .16s ease-out, box-shadow .2s; }
 .dock.tracking .lens { transition: box-shadow .2s; }
+
+/* "Show more" fold under Embeds */
+.fold { display: flex; width: 100%; align-items: center; justify-content: space-between; padding: 9px 12px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.fold:hover { background: var(--tint); color: inherit; }
+.fold:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.fold[aria-expanded="true"] .chev { transform: rotate(90deg); }
+#moreBody:not([hidden]) { animation: reveal .28s ease-out; }
