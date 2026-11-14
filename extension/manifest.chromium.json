@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Aurora Downloader",
+  "version": "2.0.0.3",
+  "description": "Download videos from YouTube and other sites as MKV, MP4, audio and more with yt-dlp on your computer. Queue, history, clips, playlists.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2eCooDoDIawmb5s/VWzicVq8iHXG2FDmlMpqFO98ypqyJBbcQLvsfHiILc2WM8lJDQLK5q4N5NdfrV5IyfS1he26wFOqA4/JPODv92KGKHCECXvsSLxhgUBW+c9HozrXT+eHvXpkpGROGCQVeFTNR9bnIkRb5V6uyTQYPtjiONunEiOnxthaWv9UCeA++0EbdffnIYNQgaBeI3YnLF1Oh8h8H0a4/kidxXHU/NNvEi7uBqytHWuBN3D+t6CplEdBl8bR7HhOvVP2+5qZZjbs5DUwzQJfrlU+qtJwQhebON8GvaTtcOywssd4ah7p97qHJ8a37AiM082rRO27V+P8GwIDAQAB",
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "nativeMessaging",
+    "activeTab",
+    "scripting",
+    "notifications",
+    "storage",
+    "downloads",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://api.github.com/*"
+  ],
+  "commands": {
+    "download-default": {
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
+      "description": "Download the current page's video with my default settings"
+    }
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    },
+    "default_title": "Download this video (yt-dlp)",
+    "default_popup": "popup/popup.html"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
+  }
+}
