@@ -1,4 +1,4 @@
-# Aurora Downloader 2.0.0 beta 3 - uninstaller for the helper (Firefox and Chromium browsers).
+# Aurora Downloader 2.0.0 beta 4 - uninstaller for the helper (Firefox and Chromium browsers).
 # Removes everything the installer added. Your downloaded videos are never touched.
 #   uninstall.ps1                remove the helper registration
 #   uninstall.ps1 -WhatIf        show what would be removed, change nothing

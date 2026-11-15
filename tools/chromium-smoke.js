@@ -16,7 +16,7 @@ function makeEnv(opts) {
       getManifest: () => JSON.parse(fs.readFileSync(EXT + "manifest.json", "utf8")),
       getURL: (p) => "chrome-extension://x/" + p,
       sendNativeMessage: async (h, m) => { nativeCalls.push(m); return opts.native(m); },
-      connectNative: () => { throw new Error("no host"); },
+      connectNative: opts.connectNative || (() => { throw new Error("no host"); }),
     },
     storage: { local: area(store.local), session: opts.noSession ? undefined : area(store.session) },
     action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setIcon: async () => {}, setTitle: async () => {} },
@@ -25,6 +25,7 @@ function makeEnv(opts) {
     notifications: { create: async () => {}, onClicked: { addListener() {} } },
     downloads: { showDefaultFolder() {} },
     tabs: { create: async () => {}, query: async () => [] },
+    cookies: opts.cookies,
   };
   const ctx = { chrome, console, setTimeout, clearTimeout, Promise, JSON, Date, Math, URL, fetch: opts.fetch, navigator: { userAgent: opts.ua || "Mozilla/5.0 Chrome/130 Safari/537.36" },
     importScripts: (...files) => { for (const f of files) vm.runInContext(fs.readFileSync(EXT + f, "utf8"), ctx, { filename: f }); } };
@@ -44,7 +45,7 @@ const ghFetch = (launcherTags) => async (url) => {
   ok(e.ctx.compat.browserName === "chrome", "detects chrome");
   const st = await e.call({ type: "getAll" });
   ok(st && st.settings && st.settings.loginBrowser === "auto", "getAll via sendResponse, loginBrowser default");
-  ok(st.version === "2.0.0 beta 3", "version label from version_name: " + st.version);
+  ok(st.version === "2.0.0 beta 4", "version label from version_name: " + st.version);
   ok(st.browserName === "chrome", "browserName in snapshot");
 
   // 2) THE BUG: winget offers the version that is already installed -> must NOT be an update
@@ -67,11 +68,11 @@ const ghFetch = (launcherTags) => async (url) => {
   // 4) launcher beta ordering
   const tags = (...t) => t.map((x) => ({ tag_name: x, html_url: "u/" + x, prerelease: /beta/.test(x), draft: false }));
   const lau = async (list) => (await makeEnv({ native: async () => ({}), fetch: ghFetch(list) }).call({ type: "checkUpdates" })).launcher;
-  let l = await lau(tags("v2.0.0-beta.3"));
-  ok(!l.available && /v2\.0\.0 beta 3/.test(l.text), "same beta = up to date: " + l.text);
-  l = await lau(tags("v2.0.0-beta.4", "v2.0.0-beta.3"));
-  ok(l.available && /beta 4/.test(l.text), "beta 4 is newer than beta 3: " + l.text);
-  l = await lau(tags("v2.0.0", "v2.0.0-beta.4"));
+  let l = await lau(tags("v2.0.0-beta.4"));
+  ok(!l.available && /v2\.0\.0 beta 4/.test(l.text), "same beta = up to date: " + l.text);
+  l = await lau(tags("v2.0.0-beta.5", "v2.0.0-beta.4"));
+  ok(l.available && /beta 5/.test(l.text), "beta 5 is newer than beta 4: " + l.text);
+  l = await lau(tags("v2.0.0", "v2.0.0-beta.5"));
   ok(l.available && /v2\.0\.0$/.test(l.text.replace(/\s*\(.*\)$/, "")), "final beats beta: " + l.text);
   l = await lau(tags("v2.0.0-beta.1"));
   ok(!l.available, "older beta is not an update");
@@ -99,6 +100,46 @@ const ghFetch = (launcherTags) => async (url) => {
   ok(e.nativeCalls.some((c) => c.action === "open" && c.path === "C:\\Videos\\clip.mkv"), "helper got the open request");
   r = await e.call({ type: "open", path: "C:\\Videos\\gone.mp4" });
   ok(r.ok === false && r.message, "failed open gives a message");
+
+  // 9) cookie export for Chromium, Firefox keeps using its own, and unknown pages get a Referer
+  const posted = [];
+  const fakePort = () => ({ postMessage: (m) => posted.push(m), onMessage: { addListener() {} }, onDisconnect: { addListener() {} }, disconnect() {} });
+  const bank = {
+    "youtube.com": [{ domain: ".youtube.com", path: "/", secure: true, httpOnly: true, name: "SID", value: "abc", expirationDate: 1900000000.5 },
+                    { domain: "www.youtube.com", path: "/", secure: false, httpOnly: false, name: "PREF", value: "x" }],
+    "google.com": [{ domain: ".google.com", path: "/", secure: true, httpOnly: false, name: "NID", value: "def", expirationDate: 1900000001 }],
+  };
+  const jar = { getAll: async (f) => (f.domain ? bank[f.domain] || [] : [{ domain: ".example.com", path: "/", secure: true, httpOnly: false, name: "s", value: "1" }]) };
+  const startOne = async (env, url) => {
+    posted.length = 0;
+    await env.call({ type: "setSettings", patch: { login: true } });
+    await env.call({ type: "start", job: { url, height: 1080, subs: false } });
+    await new Promise((r) => setTimeout(r, 60));
+    return posted.find((m) => m.action === "download");
+  };
+  e = makeEnv({ native: async () => ({}), fetch: ghFetch([]), connectNative: fakePort, cookies: jar });
+  let dl = await startOne(e, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+  ok(dl && dl.browser === "extension", "chrome-style browsers use the extension for cookies");
+  ok(dl && dl.cookies.startsWith("# Netscape HTTP Cookie File\n"), "cookie file header");
+  ok(dl && dl.cookies.includes("#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1900000000\tSID\tabc"), "httpOnly secure cookie line");
+  ok(dl && dl.cookies.includes("www.youtube.com\tFALSE\t/\tFALSE\t0\tPREF\tx"), "session cookie line");
+  ok(dl && dl.cookies.includes(".google.com\tTRUE"), "google cookies come along for youtube");
+  ok(dl && dl.referer === "", "no referer for youtube");
+  e = makeEnv({ native: async () => ({}), fetch: ghFetch([]), connectNative: fakePort, cookies: jar });
+  dl = await startOne(e, "https://example.com/some/page");
+  ok(dl && dl.cookies.includes(".example.com\tTRUE"), "other sites use the cookies for that address");
+  ok(dl && dl.referer === "https://example.com/some/page", "unknown pages send the page as the referer");
+  e = makeEnv({ native: async () => ({}), fetch: ghFetch([]), connectNative: fakePort, cookies: { getAll: async () => { throw new Error("no permission"); } } });
+  dl = await startOne(e, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+  ok(dl && dl.cookies === "", "no permission means no cookies, but the download still starts");
+  e = makeEnv({ native: async () => ({}), fetch: ghFetch([]), connectNative: fakePort, cookies: jar, ua: "Mozilla/5.0 Gecko/20100101 Firefox/140.0" });
+  dl = await startOne(e, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+  ok(dl && dl.browser === "firefox" && dl.cookies === "", "firefox lets yt-dlp read its own cookies");
+
+  // 10) Deno: the helper's check result reaches the popup
+  e = makeEnv({ native: async (m) => (m.action === "check" ? { type: "check", ok: true, ytdlp: "x", ffmpeg: true, deno: false } : {}), fetch: ghFetch([]) });
+  const hs = await e.call({ type: "checkHelper" });
+  ok(hs.status === "ok" && hs.deno === false, "missing deno is reported");
 
   // 8) the two manifests suit their browsers
   const ff = JSON.parse(fs.readFileSync(EXT + "manifest.json", "utf8")), cr = JSON.parse(fs.readFileSync(EXT + "manifest.chromium.json", "utf8"));

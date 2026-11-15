@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Aurora Downloader 2.0.0 beta 3 -->
+<!-- Aurora Downloader 2.0.0 beta 4 -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -53,6 +53,7 @@
           </fieldset>
           <label class="row" id="subsRow"><span>Embed captions</span><input type="checkbox" id="subs" class="switch" role="switch"></label>
           <p id="ffwarn" class="note warn-text" hidden>ffmpeg wasn't found, so merging video and audio may fail.</p>
+          <p id="dnwarn" class="note warn-text" hidden>Deno wasn't found. YouTube downloads work best with it. <button id="dnInstall" class="link" type="button">Install Deno</button></p>
           <div class="btn-row">
             <button id="go" class="btn primary" type="button">Download as MKV</button>
             <button id="clipBtn" class="btn secondary clip-btn" type="button" hidden title="Download just a section">
@@ -111,8 +112,8 @@
         <fieldset><legend>Sound quality</legend><div id="setAudio" class="seg"></div><p id="audioNote" class="note"></p></fieldset>
         <fieldset><legend>Downloads at once</legend><div id="setConc" class="seg"></div></fieldset>
         <label class="row"><span>Add video ID to filename<small>Title [abc123].mkv instead of Title.mkv</small></span><input type="checkbox" id="setId" class="switch" role="switch"></label>
-        <label class="row"><span>Use my browser login<small>Helps when YouTube says "not a bot". Works most reliably with Firefox</small></span><input type="checkbox" id="setLogin" class="switch" role="switch"></label>
-        <label class="row"><span>Take login from<small>Which browser yt-dlp borrows it from</small></span><select id="setLoginBrowser" class="text"><option value="auto">This browser</option><option value="firefox">Firefox</option><option value="chrome">Chrome</option><option value="edge">Edge</option><option value="brave">Brave</option><option value="chromium">Chromium</option><option value="vivaldi">Vivaldi</option><option value="opera">Opera</option></select></label>
+        <label class="row"><span>Use my browser login<small>Helps when YouTube says "not a bot"</small></span><input type="checkbox" id="setLogin" class="switch" role="switch"></label>
+        <label class="row"><span>Take login from<small>Which browser yt-dlp borrows it from</small></span><select id="setLoginBrowser" class="text"><option value="auto">Automatic</option><option value="extension">This browser (the extension reads it)</option><option value="firefox">Firefox</option><option value="chrome">Chrome</option><option value="edge">Edge</option><option value="brave">Brave</option><option value="chromium">Chromium</option><option value="vivaldi">Vivaldi</option><option value="opera">Opera</option></select></label>
       </div>
 
       <h3>Embeds</h3>

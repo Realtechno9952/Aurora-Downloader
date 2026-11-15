@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Aurora Downloader",
-  "version": "2.0.0.3",
+  "version": "2.0.0.4",
   "description": "Download videos from YouTube and other sites as MKV, MP4, audio and more with yt-dlp on your computer. Queue, history, clips, playlists.",
   "browser_specific_settings": {
     "gecko": {
@@ -58,5 +58,11 @@
     "48": "icons/icon-48.png",
     "96": "icons/icon-96.png",
     "128": "icons/icon-128.png"
-  }
+  },
+  "optional_permissions": [
+    "cookies"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ]
 }

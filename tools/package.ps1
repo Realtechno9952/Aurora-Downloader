@@ -1,4 +1,4 @@
-# Aurora Downloader 2.0.0 beta 3 - builds the extension zips in dist\ for the stores:
+# Aurora Downloader 2.0.0 beta 4 - builds the extension zips in dist\ for the stores:
 #   aurora-downloader-<version>-firefox.zip    upload at addons.mozilla.org (Developer Hub > "On your own") to get a signed .xpi
 #   aurora-downloader-<version>-chromium.zip   for the Chrome Web Store / Edge Add-ons
 # A store-published Chromium copy gets its own extension ID: pass it to install.ps1 with -ExtraExtensionIds.

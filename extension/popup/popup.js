@@ -1,4 +1,4 @@
-// Aurora Downloader 2.0.0 beta 3 - popup.
+// Aurora Downloader 2.0.0 beta 4 - popup.
 "use strict";
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -292,6 +292,7 @@ function renderHome() {
     checkRadio("res", form.height);
     $("subsRow").hidden = aud; $("subs").checked = form.subs;
     $("ffwarn").hidden = !(h.status === "ok" && h.ffmpeg === false);
+    $("dnwarn").hidden = !(h.status === "ok" && h.deno === false && t.yt);
     $("go").textContent = (pl ? "Download playlist as " : "Download as ") + extLabel(s.ext);
     $("clipBtn").hidden = !(s.clipTool && !pl && t.kind !== "playlist");
     $("goHint").textContent = "Saved to " + (s.folder ? shortPath(s.folder) : "your Downloads folder");
@@ -425,9 +426,33 @@ async function mark(which) {
   validateClip();
 }
 
+/* ---------- login cookies ---------- */
+// Chrome-based browsers hide their cookies from yt-dlp, so the extension reads them (see exportCookies in background.js).
+// That needs the browser's cookie permission, plus access to the site, and the browser asks you for both.
+const usesCookieExport = (s) => s.login && (s.loginBrowser === "extension" || (s.loginBrowser === "auto" && compat.browserName !== "firefox"));
+const askUrl = () => (tab.target && tab.target.url) || "https://www.youtube.com/";
+
+function cookieOrigins(url) {
+  let host = "";
+  try { host = new URL(url).hostname.replace(/^www\./, ""); } catch (e) { return []; }
+  if (/(^|\.)youtube\.com$/.test(host)) return ["*://*.youtube.com/*", "*://*.google.com/*"];
+  return ["*://*." + host + "/*"];
+}
+async function ensureCookieAccess(url) {
+  if (!browser.permissions) return true;
+  const wanted = { permissions: ["cookies"], origins: cookieOrigins(url) };
+  try {
+    if (await browser.permissions.contains(wanted)) return true;
+    return await browser.permissions.request(wanted); // the browser shows its own prompt
+  } catch (e) {
+    return false;
+  }
+}
+
 /* ---------- actions ---------- */
-function startJob(extra) {
+async function startJob(extra) {
   const t = tab.target; if (!t) return;
+  if (usesCookieExport(data.settings)) await ensureCookieAccess(t.url);
   forceForm.delete(t.key); clipFor = null;
   send({ type: "start", job: { url: t.url, title: t.title, thumb: t.yt ? "" : thumbFor(t, tab.info), height: parseInt(form.height, 10), subs: form.subs,
                                playlist: t.kind === "playlist" || form.playlist, ...extra } })
@@ -439,6 +464,13 @@ async function recheck() {
 }
 
 $("go").addEventListener("click", () => startJob({}));
+$("dnInstall").addEventListener("click", async () => {
+  $("dnInstall").disabled = true;
+  toast("Installing Deno...");
+  const r = await send({ type: "updateTool", target: "deno" });
+  $("dnInstall").disabled = false;
+  toast((r && r.message) || "Couldn't install Deno.");
+});
 $("subs").addEventListener("change", () => { form.subs = $("subs").checked; });
 $("tryPage").addEventListener("click", () => { if (tab.target) { forceTry.add(tab.target.key); render(); } });
 $("clipBtn").addEventListener("click", openClip);
@@ -468,7 +500,14 @@ $("resetSettings").addEventListener("click", () => send({ type: "resetSettings" 
 for (const [id, key] of [["setSubs", "subs"], ["setId", "idInName"], ["setLogin", "login"], ["setMotion", "motion"], ["setLabels", "labels"], ["setThumbEmb", "thumb"],
   ["setDesc", "desc"], ["setChapters", "chapters"], ["setMeta", "meta"], ["setSponsor", "sponsor"], ["setInfo", "infoJson"], ["setClip", "clipTool"],
   ["setClipAcc", "clipAccurate"], ["setUpd", "checkUpdates"]]) $(id).addEventListener("change", () => set({ [key]: $(id).checked }));
-$("setLoginBrowser").addEventListener("change", () => set({ loginBrowser: $("setLoginBrowser").value }));
+$("setLoginBrowser").addEventListener("change", () => {
+  const choice = $("setLoginBrowser").value;
+  set({ loginBrowser: choice });
+  if (usesCookieExport({ ...data.settings, loginBrowser: choice })) ensureCookieAccess(askUrl());
+});
+$("setLogin").addEventListener("change", () => {
+  if (usesCookieExport({ ...data.settings, login: $("setLogin").checked })) ensureCookieAccess(askUrl());
+});
 $("setSubLangs").addEventListener("change", () => {
   const v = $("setSubLangs").value.trim();
   if (!/^[A-Za-z0-9*_.,-]{1,60}$/.test(v)) { toast("Use language codes like en or en,es"); renderSettings(); return; }

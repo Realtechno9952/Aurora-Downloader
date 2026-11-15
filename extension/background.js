@@ -1,4 +1,4 @@
-// Aurora Downloader 2.0.0 beta 3 - background script: downloads, settings, history and updates.
+// Aurora Downloader 2.0.0 beta 4 - background script: downloads, settings, history and updates.
 "use strict";
 // In a Chromium service worker the helper scripts are loaded here; in Firefox the manifest loads them.
 if (typeof importScripts === "function") { try { importScripts("lib/compat.js", "lib/targets.js"); } catch (e) {} }
@@ -20,7 +20,7 @@ const CHOICES = {
   accent: ["ember", "ocean", "violet", "forest", "graphite"],
   ext: ["mkv", "mp4", "webm", "mp3", "m4a", "opus", "flac"],
   thumbFmt: ["png", "jpg", "jpeg", "webp", "jxl"],
-  loginBrowser: ["auto", "firefox", "chrome", "edge", "brave", "chromium", "vivaldi", "opera"],
+  loginBrowser: ["auto", "extension", "firefox", "chrome", "edge", "brave", "chromium", "vivaldi", "opera"],
 };
 const BOOLS = ["subs", "idInName", "login", "motion", "labels", "thumb", "meta", "desc", "chapters", "sponsor", "infoJson", "clipTool", "clipAccurate", "checkUpdates", "advOpen", "moreOpen"];
 const ACTIVE = ["queued", "running"];
@@ -63,7 +63,13 @@ function persistSoon() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(() => { try { Promise.resolve(sess.set({ jobs, nextId })).catch(() => {}); } catch (e) {} }, 300);
 }
-function loginBrowser() { return settings.loginBrowser && settings.loginBrowser !== "auto" ? settings.loginBrowser : compat.browserName; }
+// Whose login yt-dlp should use. Firefox keeps its cookies where yt-dlp can read them. Chrome-based browsers
+// lock them away, so there the extension reads the cookies itself ("extension") and hands them over.
+function loginBrowser() {
+  const pick = settings.loginBrowser;
+  if (pick && pick !== "auto") return pick;
+  return compat.browserName === "firefox" ? "firefox" : "extension";
+}
 
 function clean(p) {
   const o = {};
@@ -195,9 +201,41 @@ function onLog(j, line) {
   }
 }
 
-function launch(j) {
+// Turns the browser's cookies for a site into a cookie file yt-dlp understands (the Netscape format).
+// Needs the optional "cookies" permission, which the popup asks for when you switch the login on.
+async function exportCookies(url) {
+  try {
+    if (!browser.cookies) return "";
+    const host = new URL(url).hostname;
+    // YouTube's login is spread over youtube.com and google.com. For other sites, ask for what that address would send.
+    const filters = /(^|\.)youtube\.com$/.test(host) ? [{ domain: "youtube.com" }, { domain: "google.com" }] : [{ url }];
+    const found = new Map();
+    for (const filter of filters) {
+      for (const c of await browser.cookies.getAll(filter)) found.set(c.domain + "|" + c.path + "|" + c.name, c);
+    }
+    if (!found.size) return "";
+    const lines = ["# Netscape HTTP Cookie File"];
+    for (const c of found.values()) {
+      if (/[\t\r\n]/.test(c.name + c.value)) continue; // would break the file format
+      const subdomains = c.domain.startsWith(".") ? "TRUE" : "FALSE";
+      const expires = c.expirationDate ? Math.floor(c.expirationDate) : 0; // 0 means "until the browser closes"
+      lines.push([(c.httpOnly ? "#HttpOnly_" : "") + c.domain, subdomains, c.path, c.secure ? "TRUE" : "FALSE", expires, c.name, c.value].join("\t"));
+    }
+    return lines.join("\n") + "\n";
+  } catch (e) {
+    return ""; // no permission yet, or nothing to read: download without a login
+  }
+}
+
+async function launch(j) {
   Object.assign(j, { phase: "running", stage: "Starting" });
   streams.set(j.id, 0);
+  const mode = loginBrowser();
+  let cookies = "";
+  if (settings.login && mode === "extension") {
+    cookies = await exportCookies(j.url);
+    if (!cookies) onLog(j, "Couldn't read this browser's cookies (the permission may not be allowed yet), so this download has no login.");
+  }
   try {
     const port = browser.runtime.connectNative(HOST);
     ports.set(j.id, port);
@@ -215,7 +253,9 @@ function launch(j) {
     });
     port.postMessage({
       action: "download", url: j.url, height: j.height, subs: j.subs, ext: j.ext, playlist: j.playlist, clip: j.clip,
-      audio: settings.audio, idInName: settings.idInName, login: settings.login, browser: loginBrowser(), folder: settings.folder,
+      audio: settings.audio, idInName: settings.idInName, login: settings.login, browser: mode, cookies,
+      // Pages yt-dlp has no special support for sometimes check where the request came from.
+      referer: j.kind === "page" ? j.url : "", folder: settings.folder,
       thumb: settings.thumb, meta: settings.meta, desc: settings.desc, chapters: settings.chapters, sponsor: settings.sponsor,
       infoJson: settings.infoJson, subLangs: settings.subLangs, playlistMax: settings.playlistMax, clipAccurate: settings.clipAccurate,
     });
@@ -278,7 +318,7 @@ async function checkHelper() {
   if (helper.status !== "ok") {
     try {
       const res = await browser.runtime.sendNativeMessage(HOST, { action: "check" });
-      if (res && res.ok) helper = { status: "ok", ytdlp: res.ytdlp, ffmpeg: res.ffmpeg !== false };
+      if (res && res.ok) helper = { status: "ok", ytdlp: res.ytdlp, ffmpeg: res.ffmpeg !== false, deno: res.deno !== false };
       else if (res && res.type === "check") helper = { status: "error", reason: "ytdlp", message: res.message || "yt-dlp was not found.", detail: res.detail || "" };
       else { const m = (res && res.message) || "The helper reported a problem."; helper = { status: "error", reason: "helper", message: m, detail: m }; }
     } catch (e) {
@@ -350,13 +390,13 @@ async function thumbnail(req) {
 }
 
 /* ---------- updates: yt-dlp, ffmpeg and this extension ---------- */
-// The manifest only allows plain numbers, so a beta is written as a fourth number: 2.0.0.3 means "2.0.0 beta 3".
+// The manifest only allows plain numbers, so a beta is written as a fourth number: 2.0.0.4 means "2.0.0 beta 4".
 function myVersion() {
   const [major, minor, patch, beta] = browser.runtime.getManifest().version.split(".");
   const base = [major, minor || 0, patch || 0].join(".");
   return beta && beta !== "0" ? base + " beta " + beta : base;
 }
-// Reads "2.0.0 beta 3", "v2.0.0-beta.2" or "2.0.0". A final release counts as newer than any beta of it.
+// Reads "2.0.0 beta 4", "v2.0.0-beta.2" or "2.0.0". A final release counts as newer than any beta of it.
 function parseVer(s) {
   const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-.\s_]*(alpha|a|beta|b|rc|pre|preview)[-.\s_]*(\d+)?)?/i.exec(String(s || "").trim());
   if (!m) return { core: [0, 0, 0], rank: 4, pre: 0 };
@@ -462,7 +502,7 @@ async function checkUpdates() {
 function cleanLine(s) { return String(s || "").replace(/[^\x20-\x7e]/g, " ").replace(/\s+/g, " ").trim().slice(-110); }
 function updateTool(target, opts) {
   const recheck = !opts || opts.recheck !== false;
-  if (target !== "ytdlp" && target !== "ffmpeg") return Promise.resolve({ ok: false, message: "Unknown update target." });
+  if (!["ytdlp", "ffmpeg", "deno"].includes(target)) return Promise.resolve({ ok: false, message: "Unknown update target." });
   if (op.running) return Promise.resolve({ ok: false, message: "An update is already running." });
   if (jobs.some((j) => ACTIVE.includes(j.phase))) return Promise.resolve({ ok: false, message: "Finish or cancel your downloads first." });
   op = { running: true, target, line: "Starting...", ok: null, message: "" }; emit();
@@ -472,6 +512,8 @@ function updateTool(target, opts) {
       if (finished) return; finished = true;
       op = { running: false, target, line: "", ok, message }; emit();
       if (port) { try { port.disconnect(); } catch (e) {} }
+      // After installing Deno the helper should look again, so the popup stops warning about it.
+      if (ok && target === "deno") { helper = { status: "unknown" }; checkHelper(); }
       notify(ok ? "Update finished" : "Update failed", message);
       (ok && recheck ? checkUpdates() : Promise.resolve()).then(() => resolve({ ok, message }));
     };

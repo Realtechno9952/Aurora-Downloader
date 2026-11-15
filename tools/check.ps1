@@ -1,4 +1,4 @@
-# Aurora Downloader 2.0.0 beta 3 - repository check. Run it before every commit or release (it also runs on GitHub).
+# Aurora Downloader 2.0.0 beta 4 - repository check. Run it before every commit or release (it also runs on GitHub).
 # Catches: merge-conflict markers, scripts that do not parse, non-ASCII in .ps1/.bat, broken JSON,
 # files the manifest points at that are missing, and a helper version that does not match the manifest.
 [CmdletBinding()]

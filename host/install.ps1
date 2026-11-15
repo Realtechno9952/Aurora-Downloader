@@ -1,4 +1,4 @@
-# Aurora Downloader 2.0.0 beta 3 - installer for the helper (Firefox, Chrome, Edge, Brave and other Chromium browsers).
+# Aurora Downloader 2.0.0 beta 4 - installer for the helper (Firefox, Chrome, Edge, Brave and other Chromium browsers).
 # Registers the helper for the current Windows user (no administrator rights needed), then tests it.
 #   install.ps1          register and test
 #   install.ps1 -Check   only test, change nothing

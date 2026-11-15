@@ -1,8 +1,8 @@
-# Aurora Downloader 2.0.0 beta 3 - the helper that lets the browser extension (Firefox or Chromium) run yt-dlp on this computer.
+# Aurora Downloader 2.0.0 beta 4 - the helper that lets the browser extension (Firefox or Chromium) run yt-dlp on this computer.
 # The browser starts it through host.bat and talks to it over standard input/output (native messaging).
 # Runs in Windows PowerShell 5.1 and PowerShell 7. Keep this file ASCII-only.
 $ErrorActionPreference = 'Stop'
-$script:Version    = '2.0.0.3'
+$script:Version    = '2.0.0.4'
 $script:HostDir    = $PSScriptRoot
 $script:isWin      = ($env:OS -eq 'Windows_NT')
 $script:exeSuffix  = ''
@@ -399,7 +399,34 @@ function Invoke-Check {
     Send-Msg @{ type = 'check'; ok = $true; ytdlp = [string]$t.ytdlp; ffmpeg = [bool]$t.ffmpegDir; deno = [bool]$t.denoDir }
 }
 
+# Cookies sent by the extension (Chrome-based browsers) are written to a temporary file that only exists
+# while yt-dlp is running.
+$script:tempFiles = New-Object System.Collections.Generic.List[string]
+
+function New-CookieFile([string]$text) {
+    if ($text.Length -gt 2000000) { throw 'The cookie list is too big.' }
+    $dir = Join-Path ([IO.Path]::GetTempPath()) 'yt-dlp-launcher'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    # Clear out anything an earlier run left behind (for example if the browser was closed mid-download).
+    Get-ChildItem -LiteralPath $dir -Filter 'cookies-*.txt' -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-1) } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    $path = Join-Path $dir ('cookies-' + [guid]::NewGuid().ToString('N') + '.txt')
+    [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding $false))
+    $script:tempFiles.Add($path)
+    return $path
+}
+
+function Remove-TempFiles {
+    foreach ($f in $script:tempFiles) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    $script:tempFiles.Clear()
+}
+
 function Invoke-Download($msg) {
+    try { Invoke-DownloadCore $msg } finally { Remove-TempFiles }
+}
+
+function Invoke-DownloadCore($msg) {
     $url = Test-TargetUrl ([string]$msg.url)
     $height = 0
     if ((-not [int]::TryParse([string]$msg.height, [ref]$height)) -or $height -lt 0 -or $height -gt 4320) {
@@ -489,9 +516,19 @@ function Invoke-Download($msg) {
     }
     if ($ffArg) { $all.Add($ffArg) }
     $login = [bool]$msg.login
-    $cookieBrowser = [string]$msg.browser
-    if ($cookieBrowser -notmatch '^(firefox|chrome|edge|brave|chromium|vivaldi|opera)$') { $cookieBrowser = 'firefox' }
-    if ($login) { $all.Add('--cookies-from-browser ' + $cookieBrowser) }
+    if ($login) {
+        $cookieBrowser = [string]$msg.browser
+        if ($msg.cookies) {
+            # The extension read the cookies itself (Chrome-based browsers keep theirs locked away from yt-dlp).
+            $all.Add('--cookies "' + (New-CookieFile ([string]$msg.cookies)) + '"')
+        } elseif ($cookieBrowser -match '^(firefox|chrome|edge|brave|chromium|vivaldi|opera)$') {
+            $all.Add('--cookies-from-browser ' + $cookieBrowser)
+        } elseif (-not $cookieBrowser) {
+            $all.Add('--cookies-from-browser firefox')   # older versions of the extension did not say
+        }
+    }
+    # Pages yt-dlp has no special support for sometimes check where the request came from.
+    if ($msg.referer) { $all.Add('--referer "' + (Test-TargetUrl ([string]$msg.referer)) + '"') }
 
     # what gets embedded in the file
     if (([bool]$msg.thumb) -and ($ext -ne 'webm')) { $all.Add('--embed-thumbnail') }
@@ -633,14 +670,17 @@ function Get-LastLines([string]$text, [int]$count) {
 
 function Invoke-Update($msg) {
     $target = [string]$msg.target
-    if ($target -ne 'ytdlp' -and $target -ne 'ffmpeg') { throw 'Unknown update target.' }
-    $id = 'yt-dlp.yt-dlp'
-    if ($target -eq 'ffmpeg') { $id = 'yt-dlp.FFmpeg' }
+    $packages = @{ ytdlp = 'yt-dlp.yt-dlp'; ffmpeg = 'yt-dlp.FFmpeg'; deno = 'DenoLand.Deno' }
+    if (-not $packages.ContainsKey($target)) { throw 'Unknown update target.' }
+    $id = $packages[$target]
+    # Deno is usually not installed yet, so it is installed rather than upgraded.
+    $verb = 'upgrade'
+    if ($target -eq 'deno') { $verb = 'install' }
     $t = Get-Tools
     $wg = Find-Winget
-    if ($wg -and ($msg.managed -or $target -eq 'ffmpeg')) {
-        Send-Msg @{ type = 'log'; line = 'Asking winget to update...' }
-        $r = Invoke-Streamed $wg "upgrade --id $id --exact --source winget --silent --accept-source-agreements --accept-package-agreements --disable-interactivity"
+    if ($wg -and ($msg.managed -or $target -ne 'ytdlp')) {
+        Send-Msg @{ type = 'log'; line = "Asking winget to $verb..." }
+        $r = Invoke-Streamed $wg "$verb --id $id --exact --source winget --silent --accept-source-agreements --accept-package-agreements --disable-interactivity"
         $wingetSaid = Get-LastLines $r.out 2
         # winget's record can be out of step with the real yt-dlp.exe. If it refuses, try yt-dlp's own updater.
         if ($target -eq 'ytdlp' -and $t.ytdlp -and (-not $r.cancelled) -and $r.code -ne 0 -and $r.code -ne -1978335189 -and $r.code -ne -1978335135) {
@@ -652,14 +692,16 @@ function Invoke-Update($msg) {
         Send-Msg @{ type = 'log'; line = 'Using the built-in yt-dlp updater...' }
         $r = Invoke-Streamed $t.ytdlp '-U'
     } else {
-        Send-Msg @{ type = 'done'; ok = $false; message = "winget wasn't found. Update it yourself with: winget upgrade --id $id" }
+        Send-Msg @{ type = 'done'; ok = $false; message = "winget wasn't found. Do it yourself with: winget $verb --id $id" }
         return
     }
     $script:tools = $null
     if ($r.cancelled) {
         Send-Msg @{ type = 'done'; ok = $false; message = 'The update was interrupted.' }
     } elseif ($r.code -eq 0) {
-        Send-Msg @{ type = 'done'; ok = $true; message = 'Updated.' }
+        $doneText = 'Updated.'
+        if ($target -eq 'deno') { $doneText = 'Deno installed.' }
+        Send-Msg @{ type = 'done'; ok = $true; message = $doneText }
     } elseif ($r.code -eq -1978335189 -or $r.code -eq -1978335135) {
         # winget: no applicable upgrade found
         Send-Msg @{ type = 'done'; ok = $true; message = 'Already up to date.' }
