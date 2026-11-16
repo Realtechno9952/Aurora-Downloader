@@ -6,7 +6,7 @@
 
 **Download videos and audio from your browser with yt-dlp. One click, no copy-pasting links.**
 
-[![Latest release](https://img.shields.io/github/v/release/Realtechno9952/yt-dlp-launcher?include_prereleases&label=release&color=e8590c)](https://github.com/Realtechno9952/yt-dlp-launcher/releases)
+[![Latest release](https://img.shields.io/github/v/release/Realtechno9952/Aurora-Downloader?include_prereleases&label=release&color=e8590c)](https://github.com/Realtechno9952/Aurora-Downloader/releases)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078d4)
 ![Browsers](https://img.shields.io/badge/browsers-Firefox%20%7C%20Chrome%20%7C%20Edge%20%7C%20Brave-555)
 ![Manifest](https://img.shields.io/badge/extension-Manifest%20V3-2f9e44)
@@ -72,14 +72,14 @@ Aurora Downloader uses these programs to do the actual downloading.
 
 ### Step 2: Download Aurora Downloader
 
-1. Go to the [Releases page](https://github.com/Realtechno9952/yt-dlp-launcher/releases) and download the newest **zip file** listed under **Assets**.
-2. Right-click the zip, choose **Extract All**, and pick a folder you will keep, for example `C:\Tools\yt-dlp-launcher`.
+1. Go to the [Releases page](https://github.com/Realtechno9952/Aurora-Downloader/releases) and download the newest **zip file** listed under **Assets**.
+2. Right-click the zip, choose **Extract All**, and pick a folder you will keep, for example `C:\Tools\aurora-downloader`.
 
    Don't use Downloads or the Desktop. If you move the folder later, just do Step 3 again.
 
 ### Step 3: Run the installer
 
-Open the folder and **double-click `install.bat`**. A window opens and sets everything up. Wait until it says **All set**.
+Open the **host** folder and **double-click `install.bat`**. A window opens and sets everything up. Wait until it says **All set**.
 
 - If Windows shows a blue "Windows protected your PC" box, click **More info**, then **Run anyway**.
 - If you see red lines, read them. They say what is missing, and it is usually a tool from Step 1.
@@ -111,7 +111,7 @@ Your file goes to your Downloads folder. You can change that in **Settings**. Wh
 
 - **Firefox forgets temporary add-ons** when it closes, so repeat the Firefox part of Step 4 after a restart. A permanent version is planned.
 - **After updating,** run `install.bat` again.
-- **To remove it,** double-click `uninstall.bat`, then remove the extension on your browser's extensions page.
+- **To remove it,** open the **host** folder, double-click `uninstall.bat`, then remove the extension on your browser's extensions page.
 - **Stuck?** See [Troubleshooting](#troubleshooting).
 
 ## How it works
@@ -162,38 +162,29 @@ flowchart LR
 
 ## Development
 
+There is no build step. The extension is plain JavaScript and the helper is plain PowerShell.
+
 ```
-yt-dlp-launcher/
-  install.bat, uninstall.bat   double-click installer and uninstaller
-  extension/                   the extension (Firefox loads this folder)
-    manifest.json              Firefox manifest (background.scripts)
-    manifest.chromium.json     Chromium manifest (service worker + fixed key)
-    background.js              queue, settings, history, updates
-    popup/                     the popup UI and the glass dock
-    lib/                       URL parser and browser compatibility helpers
-  host/                        the native helper
-    host.ps1, host.bat         the helper itself
-    install.ps1, uninstall.ps1 registration for each browser
-  tools/
-    check.ps1                  repository checks
-    package.ps1                builds the store zips in dist/
-    chromium-smoke.js          tests for the background script (Node.js)
-  assets/                      logos and images
+aurora-downloader/
+  extension/                    the extension (Firefox loads this folder)
+    manifest.json               Firefox manifest (background.scripts)
+    manifest.chromium.json      Chromium manifest (service worker + fixed key)
+    background.js               queue, settings, history, updates
+    popup/                      the popup UI and the glass dock
+    lib/                        URL parser and browser compatibility helpers
+  host/                         the native helper
+    host.ps1, host.bat          the helper itself
+    install.ps1, install.bat    registers the helper and makes the Chromium copy
+    uninstall.ps1, uninstall.bat
+  assets/                       logos and images
+  preview.png                   screenshot used in this README
 ```
 
 **Why two manifests?** Chromium rejects `background.scripts` in Manifest V3 and Firefox has no service workers, so each browser gets its own. `install.bat` makes `extension-chromium/` from `extension/` with the Chromium manifest swapped in. That copy is generated, so it is not in Git.
 
-**Fixed extension ID.** The `key` in `manifest.chromium.json` gives Chromium browsers the same extension ID on every computer, which is what lets the helper allow only this extension. `check.ps1` verifies that the key and the ID in `install.ps1` match.
+**Fixed extension ID.** The `key` in `manifest.chromium.json` gives Chromium browsers the same extension ID on every computer, which is what lets the helper allow only this extension. The same ID is in `host/install.ps1`.
 
-**Versions.** Manifests only allow plain numbers, so a beta is written as a fourth number: `2.0.0.4` means "2.0.0 beta 4". The helper's version must match the manifests, and `check.ps1` enforces that.
-
-**Checks and tests**
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\check.ps1   # parse, JSON, manifests, versions, merge markers
-node tools\chromium-smoke.js                               # background script, simulated Chromium worker
-powershell -ExecutionPolicy Bypass -File tools\package.ps1 # dist\...-firefox.zip and ...-chromium.zip
-```
+**Versions.** Manifests only allow plain numbers, so a beta is written as a fourth number. Betas 2 to 4 used the beta number itself (`2.0.0.4` is beta 4); from beta 4.5 on it is ten times the beta, so `2.0.0.45` is beta 4.5 and `2.0.0.50` is beta 5. The helper's version in `host.ps1` must match the manifests.
 
 ## Roadmap
 
@@ -202,7 +193,7 @@ powershell -ExecutionPolicy Bypass -File tools\package.ps1 # dist\...-firefox.zi
 - Channel monitoring for keeping an archive up to date
 - Automated tests on a Windows runner
 
-Ideas and bug reports are welcome in [Issues](https://github.com/Realtechno9952/yt-dlp-launcher/issues).
+Ideas and bug reports are welcome in [Issues](https://github.com/Realtechno9952/Aurora-Downloader/issues).
 
 ## Responsible use
 

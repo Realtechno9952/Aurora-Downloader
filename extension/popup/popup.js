@@ -1,4 +1,4 @@
-// Aurora Downloader 2.0.0 beta 4 - popup.
+// Aurora Downloader 2.0.0 beta 4.5 - popup.
 "use strict";
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -533,7 +533,7 @@ $("updBtn").addEventListener("click", () => {
   if (mode === "update") send({ type: "updateAll" }).then((r) => { if (r && r.ok === false && r.message) toast(r.message); });
   else if (mode === "release") {
     const u = data.updates && data.updates.launcher && data.updates.launcher.url;
-    browser.tabs.create({ url: u || data.releasesUrl || "https://github.com/Realtechno9952/yt-dlp-launcher/releases" });
+    browser.tabs.create({ url: u || data.releasesUrl || "https://github.com/Realtechno9952/Aurora-Downloader/releases" });
   } else send({ type: "checkUpdates" });
 });
 

@@ -1,11 +1,15 @@
-// Aurora Downloader 2.0.0 beta 4 - background script: downloads, settings, history and updates.
+// Aurora Downloader 2.0.0 beta 4.5 - background script: downloads, settings, history and updates.
 "use strict";
 // In a Chromium service worker the helper scripts are loaded here; in Firefox the manifest loads them.
 if (typeof importScripts === "function") { try { importScripts("lib/compat.js", "lib/targets.js"); } catch (e) {} }
 // Owns settings, history, updates and every download. Each download gets its own native helper process.
 
 const HOST = "yt_dlp_host";
-const RELEASES_URL = "https://github.com/Realtechno9952/yt-dlp-launcher/releases";
+// The GitHub repository was renamed from yt-dlp-launcher. GitHub forwards the old name, so the update
+// check tries the new name first and falls back to the old one in case it is ever needed.
+const REPO = "Realtechno9952/Aurora-Downloader";
+const OLD_REPO = "Realtechno9952/yt-dlp-launcher";
+const RELEASES_URL = "https://github.com/" + REPO + "/releases";
 const DEFAULTS = {
   height: "0", subs: true, audio: "high", idInName: false, login: false, maxConcurrent: 2,
   theme: "system", accent: "ember", motion: true, labels: true,
@@ -390,15 +394,19 @@ async function thumbnail(req) {
 }
 
 /* ---------- updates: yt-dlp, ffmpeg and this extension ---------- */
-// The manifest only allows plain numbers, so a beta is written as a fourth number: 2.0.0.4 means "2.0.0 beta 4".
+// The manifest only allows plain numbers, so a beta is the fourth number. Up to beta 4 that was the beta itself
+// (2.0.0.4 is "beta 4"). Since beta 4.5 it is ten times the beta, so betas can have halves and still sort in
+// order: 2.0.0.45 is "beta 4.5" and 2.0.0.50 is "beta 5". Anything below 10 is a whole beta.
 function myVersion() {
-  const [major, minor, patch, beta] = browser.runtime.getManifest().version.split(".");
+  const [major, minor, patch, last] = browser.runtime.getManifest().version.split(".");
   const base = [major, minor || 0, patch || 0].join(".");
-  return beta && beta !== "0" ? base + " beta " + beta : base;
+  const raw = parseInt(last, 10) || 0;
+  const beta = raw >= 10 ? raw / 10 : raw;
+  return beta ? base + " beta " + beta : base;
 }
-// Reads "2.0.0 beta 4", "v2.0.0-beta.2" or "2.0.0". A final release counts as newer than any beta of it.
+// Reads "2.0.0 beta 4.5", "v2.0.0-beta.4.5" or "2.0.0". A final release counts as newer than any beta of it.
 function parseVer(s) {
-  const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-.\s_]*(alpha|a|beta|b|rc|pre|preview)[-.\s_]*(\d+)?)?/i.exec(String(s || "").trim());
+  const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-.\s_]*(alpha|a|beta|b|rc|pre|preview)[-.\s_]*(\d+(?:\.\d+)?)?)?/i.exec(String(s || "").trim());
   if (!m) return { core: [0, 0, 0], rank: 4, pre: 0 };
   const k = (m[4] || "").toLowerCase();
   const rank = !k ? 4 : (k === "a" || k === "alpha") ? 1 : (k === "rc") ? 3 : 2;
@@ -429,6 +437,10 @@ async function ghJson(path) {
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(r.status === 403 ? "GitHub rate limit, try again later" : "GitHub answered " + r.status);
   return r.json();
+}
+// ghJson gives back null when GitHub says "not found", so that is the cue to try the old repository name.
+async function releaseList() {
+  return (await ghJson(REPO + "/releases?per_page=10")) || ghJson(OLD_REPO + "/releases?per_page=10");
 }
 const reason = (r) => String((r.reason && r.reason.message) || r.reason || "unknown error");
 
@@ -488,7 +500,7 @@ async function checkUpdates() {
   const needGh = !!iv.ytdlp && !(wg && wg.ytdlp);
   const [gy, gl] = await Promise.allSettled([
     needGh ? ghJson("yt-dlp/yt-dlp/releases/latest") : Promise.resolve(null),
-    ghJson("Realtechno9952/yt-dlp-launcher/releases?per_page=10"),
+    releaseList(),
   ]);
   const out = { checking: false, checkedAt: Date.now(), ytdlp: judgeYtdlp(iv.ytdlp, wg && wg.ytdlp, needGh ? gy : null),
                 ffmpeg: judgeFfmpeg(iv.ffmpeg, wg && wg.ffmpeg), launcher: judgeLauncher(gl), winget: !!iv.winget };

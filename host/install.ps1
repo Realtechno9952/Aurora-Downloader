@@ -1,4 +1,4 @@
-# Aurora Downloader 2.0.0 beta 4 - installer for the helper (Firefox, Chrome, Edge, Brave and other Chromium browsers).
+# Aurora Downloader 2.0.0 beta 4.5 - installer for the helper (Firefox, Chrome, Edge, Brave and other Chromium browsers).
 # Registers the helper for the current Windows user (no administrator rights needed), then tests it.
 #   install.ps1          register and test
 #   install.ps1 -Check   only test, change nothing
@@ -79,8 +79,8 @@ if ($onWindows) { Ok ('Windows, PowerShell ' + $PSVersionTable.PSVersion) }
 elseif ($NoRegistry) { Note 'Not Windows: running in test mode.' }
 else { Bad 'This helper only works on Windows.' }
 if ($PSVersionTable.PSVersion.Major -lt 5) { Bad 'PowerShell 5.1 or newer is needed (it comes with Windows 10 and 11).' }
-if ($Here -match '[^\x00-\x7F]') { Note 'This folder path has non-English characters. If your browser cannot start the helper, move the whole folder to a simple path such as C:\Tools\yt-dlp-launcher and run this again.' }
-if ($Here.Length -gt 180) { Note 'This folder path is very long. A short one such as C:\Tools\yt-dlp-launcher is safer.' }
+if ($Here -match '[^\x00-\x7F]') { Note 'This folder path has non-English characters. If your browser cannot start the helper, move the whole folder to a simple path such as C:\Tools\aurora-downloader and run this again.' }
+if ($Here.Length -gt 180) { Note 'This folder path is very long. A short one such as C:\Tools\aurora-downloader is safer.' }
 foreach ($f in 'host.ps1', 'host.bat') {
     if (-not (Test-Path -LiteralPath (Join-Path $Here $f))) { Bad ('A file is missing: ' + $f) }
 }
@@ -104,7 +104,15 @@ if (-not $Check) {
     Say ''
     Say '2. Registering the helper with your browsers'
     try {
-        if ($onWindows) { Get-ChildItem -LiteralPath (Split-Path $Here -Parent) -Recurse -File -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue }
+        if ($onWindows) {
+            # Files from a downloaded zip carry a "came from the internet" mark that makes PowerShell hesitate.
+            # Clear it only on this program's own files: the helper, the .bat files and the extension.
+            $root = Split-Path $Here -Parent
+            $own = @(Get-ChildItem -LiteralPath $Here -File -ErrorAction SilentlyContinue) +
+                   @(Get-ChildItem -LiteralPath $root -Filter '*.bat' -File -ErrorAction SilentlyContinue) +
+                   @(Get-ChildItem -LiteralPath $ExtensionDir -Recurse -File -ErrorAction SilentlyContinue)
+            $own | Unblock-File -ErrorAction SilentlyContinue
+        }
         $ffManifest = [ordered]@{
             name               = $HostName
             description        = 'Runs yt-dlp for the Aurora Downloader extension'

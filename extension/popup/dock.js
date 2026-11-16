@@ -1,4 +1,4 @@
-// Aurora Downloader 2.0.0 beta 4 - floating glass tab bar.
+// Aurora Downloader 2.0.0 beta 4.5 - floating glass tab bar.
 "use strict";
 // Floating glass tab bar. A "lens" slides under the active tab with a springy ease.
 //   Press:    the lens lifts slightly, right where it is. It never jumps to the cursor.

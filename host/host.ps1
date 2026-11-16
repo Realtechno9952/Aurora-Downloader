@@ -1,8 +1,8 @@
-# Aurora Downloader 2.0.0 beta 4 - the helper that lets the browser extension (Firefox or Chromium) run yt-dlp on this computer.
+# Aurora Downloader 2.0.0 beta 4.5 - the helper that lets the browser extension (Firefox or Chromium) run yt-dlp on this computer.
 # The browser starts it through host.bat and talks to it over standard input/output (native messaging).
 # Runs in Windows PowerShell 5.1 and PowerShell 7. Keep this file ASCII-only.
 $ErrorActionPreference = 'Stop'
-$script:Version    = '2.0.0.4'
+$script:Version    = '2.0.0.45'
 $script:HostDir    = $PSScriptRoot
 $script:isWin      = ($env:OS -eq 'Windows_NT')
 $script:exeSuffix  = ''
@@ -403,10 +403,26 @@ function Invoke-Check {
 # while yt-dlp is running.
 $script:tempFiles = New-Object System.Collections.Generic.List[string]
 
+# Only the current Windows user may open this folder, so nobody else on the PC can read a cookie file in it.
+function Lock-Folder([string]$dir) {
+    if (-not $script:isWin) { return }
+    try {
+        $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        $acl = Get-Acl -LiteralPath $dir
+        $acl.SetAccessRuleProtection($true, $false)   # stop inheriting permissions from the Temp folder
+        $acl.AddAccessRule($rule)
+        Set-Acl -LiteralPath $dir -AclObject $acl
+    } catch {
+        # If this fails the folder keeps the normal Temp permissions, which already belong to this user.
+    }
+}
+
 function New-CookieFile([string]$text) {
     if ($text.Length -gt 2000000) { throw 'The cookie list is too big.' }
-    $dir = Join-Path ([IO.Path]::GetTempPath()) 'yt-dlp-launcher'
+    $dir = Join-Path ([IO.Path]::GetTempPath()) 'aurora-downloader'
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    Lock-Folder $dir
     # Clear out anything an earlier run left behind (for example if the browser was closed mid-download).
     Get-ChildItem -LiteralPath $dir -Filter 'cookies-*.txt' -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-1) } |
@@ -418,7 +434,14 @@ function New-CookieFile([string]$text) {
 }
 
 function Remove-TempFiles {
-    foreach ($f in $script:tempFiles) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    foreach ($f in $script:tempFiles) {
+        try {
+            # Blank the file before deleting it, so the cookies are not left readable on the disk (best effort).
+            $size = (Get-Item -LiteralPath $f -ErrorAction Stop).Length
+            [IO.File]::WriteAllBytes($f, (New-Object byte[] $size))
+        } catch { }
+        Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+    }
     $script:tempFiles.Clear()
 }
 

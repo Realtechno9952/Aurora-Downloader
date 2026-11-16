@@ -1,4 +1,4 @@
-// Aurora Downloader 2.0.0 beta 4 - works out what a page URL is (shared by popup and background).
+// Aurora Downloader 2.0.0 beta 4.5 - works out what a page URL is (shared by popup and background).
 "use strict";
 // Shared by the background script and the popup: works out what a page URL is.
 //   kind "video"    a single video (YouTube, or a site yt-dlp is known to handle)
